@@ -539,10 +539,10 @@ fun settleConditionals(msg: slice) {
 
     var storedStates: slice = ctxQuarantine.beginParse();
     var (seqnoA: int, sentA: int, conditionalsHashA: int) =
-    (storedStates.loadUint(64), storedStates.loadCoins(), storedStates.loadUint(256));
+        (storedStates.loadUint(64), storedStates.loadCoins(), storedStates.loadUint(256));
 
     var (seqnoB: int, sentB: int, conditionalsHashB: int) =
-    (storedStates.loadUint(64), storedStates.loadCoins(), storedStates.loadUint(256));
+        (storedStates.loadUint(64), storedStates.loadCoins(), storedStates.loadUint(256));
 
     var quarantineeStarted: int = storedStates.loadUint(32);
     var quarantineeFinished: int = quarantineeStarted + closureConfigQuarantineDuration();
@@ -606,14 +606,14 @@ fun finishUncooperativeClose() {
 
     var storedStates: slice = ctxQuarantine.beginParse();
     var (seqnoA: int, sentA: int, _: int) =
-    (storedStates.loadUint(64), storedStates.loadCoins(), storedStates.loadUint(256));
+        (storedStates.loadUint(64), storedStates.loadCoins(), storedStates.loadUint(256));
     var (seqnoB: int, sentB: int, _: int) =
-    (storedStates.loadUint(64), storedStates.loadCoins(), storedStates.loadUint(256));
+        (storedStates.loadUint(64), storedStates.loadCoins(), storedStates.loadUint(256));
 
     var quarantineeStarted: int = storedStates.loadUint(32);
     assert(quarantineeStarted +
-    closureConfigQuarantineDuration() +
-    closureConfigConditionalCloseDuration() < now()) throw ERROR_TOO_EARLY_TO_CLOSE;
+        closureConfigQuarantineDuration() +
+        closureConfigConditionalCloseDuration() < now()) throw ERROR_TOO_EARLY_TO_CLOSE;
 
     acceptExternalMessage();
 
