@@ -1,0 +1,45 @@
+cp#_ amount:Coins condition:Cell = ConditionalPayment;
+sc_body#_ seqno:uint64 sent:Coins conditionals_hash:uint256 = SemiChannelBody;
+semichannel_state#43685374 channel_id:uint128 data:SemiChannelBody counterparty_data:(Maybe ^SemiChannelBody)
+                    = SemiChannel;
+signed_schs#_ signature:bits512 state:^SemiChannel = SignedSemiChannel;
+quarantined_state#_ state_A:SemiChannelBody state_B:SemiChannelBody
+                 quarantine_starts:uint32
+                 state_commited_by_A:Bool
+                 state_challenged:Bool
+                 = QuarantinedState;
+conf#_ quarantin_duration:uint32
+     misbehavior_fine:Coins
+     conditional_close_duration:uint32 = ClosingConfig;
+payment_type_ec#_ id:(## 32) = PaymentTypeEC;
+payment_type_jetton#_ master:MsgAddress wallet:MsgAddress = PaymentTypeJetton;
+payment_conf#_ storage_fee:Coins
+              dest_A:MsgAddress
+              dest_B:MsgAddress
+              currency:(Maybe (Either PaymentTypeJetton PaymentTypeEC)) = PaymentConfig;
+channel_state#_ inited:Bool
+              balance_A:Coins balance_B:Coins
+              key_A:uint256 key_B:uint256
+              channel_id:uint128
+              config:^ClosingConfig
+              commited_seqno_A:uint32 commited_seqno_B:uint32
+              quarantin:(Maybe ^QuarantinedState)
+              payments:^PaymentConfig = Storage;
+
+init_channel_inner#481ebc44 channel_id:uint128 = InitChannelInner;
+cooperative_close_inner#0802ada3 channel_id:uint128 balance_A:Coins balance_B:Coins seqno_A:uint64 seqno_B:uint64 = CooperativeCloseInner;
+cooperative_commit_inner#668532b6 channel_id:uint128 seqno_A:uint64 seqno_B:uint64 withdraw_A:Coins withdraw_B:Coins = CooperativeCommitInner;
+start_uncooperative_close_inner#8c623692 channel_id:uint128 sch_A:^SignedSemiChannel sch_B:^SignedSemiChannel = StartUncooperativeCloseInner;
+challenge_quarantined_state_inner#b8a21379 channel_id:uint128 sch_A:^SignedSemiChannel sch_B:^SignedSemiChannel = ChallengeQuarantinedStateInner;
+settle_conditionals_inner#f69e0a30 channel_id:uint128 conditionals_to_settle:(HashmapE 32 Cell) = SettleConditionalsInner;
+
+top_up_balance#593e3893 is_A:Bool = InternalMsgBody;
+init_channel#79ae99b5 is_A:Bool signature:bits512 data:InitChannelInner = InternalMsgBody;
+cooperative_close#d2b1eeeb sig_A:^bits512 sig_B:^bits512 data:CooperativeCloseInner = InternalMsgBody;
+cooperative_commit#076bfdf1 sig_A:^bits512 sig_B:^bits512 data:CooperativeCommitInner = InternalMsgBody;
+start_uncooperative_close#8175e15d signed_by_A:Bool signature:bits512 data:StartUncooperativeCloseInner = InternalMsgBody;
+challenge_quarantined_state#9a77c0db challenged_by_A:Bool signature:bits512 data:ChallengeQuarantinedStateInner = InternalMsgBody;
+settle_conditionals#56c39b4c from_A:Bool signature:bits512 data:SettleConditionalsInner = InternalMsgBody;
+finish_uncooperative_close#25432a91 = InternalMsgBody;
+channel_closed#dddc88ba channel_id:uint128 = InternalMsgBody;
+channel_withdraw#a32f0b3c channel_id:uint128 = InternalMsgBody;

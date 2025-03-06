@@ -116,34 +116,34 @@ const ERROR_NOT_ENOUGH_CONTRACT_BALANCE = 122;
 const ERROR_NOT_ENOUGH_MONEY_FOR_INIT_STORAGE = 123;
 const ERROR_JETTON_WALLET_ALREADY_INSTALLED = 124;
 
-const TAG_INIT = 0x696e6974;
-const TAG_COOPERATIVE_CLOSE = 0x436c6f73;
-const TAG_COOPERATIVE_COMMIT = 0x43436d74;
-const TAG_START_UNCOOPERATIVE_CLOSE = 0x556e436c;
-const TAG_CHALLENGE_STATE = 0x43686751;
-const TAG_SETTLE_CONDITIONALS = 0x436c436e;
-const TAG_STATE = 0x43685374;
-
 const STORAGE_FULL = 4;
 const STORAGE_UP_TO_QUARANTINE = 3;
 const STORAGE_UP_TO_CLOSURE_CONFIG = 1;
 const STORAGE_BALANCES_AND_KEYS = 0;
 
-const OP_TOP_UP_BALANCE = "top_up_balance is_A:Bool = InternalMsgBody"c;
-const OP_INIT_CHANNEL = "init_channel is_A:Bool signature:bits512 tag:# = tag 1768843636 channel_id:uint128 = InternalMsgBody"c;
-const OP_COOPERATIVE_CLOSE = "cooperative_close sig_A:^bits512 sig_B:^bits512 tag:# = tag 1131179891 channel_id:uint128 balance_A:Coins balance_B:Coins seqno_A:uint64 seqno_B:uint64 = InternalMsgBody"c;
-const OP_COOPERATIVE_COMMIT = "cooperative_commit sig_A:^bits512 sig_B:^bits512 tag:# = tag 1128492404 channel_id:uint128 seqno_A:uint64 seqno_B:uint64 withdraw_A:Coins withdraw_B:Coins = InternalMsgBody"c;
-const OP_START_UNCOOPERATIVE_CLOSE = "start_uncooperative_close signed_by_A:Bool signature:bits512 tag:# = tag 1433289580 channel_id:uint128 sch_A:^SignedSemiChannel sch_B:^SignedSemiChannel = InternalMsgBody"c;
-const OP_CHALLENGE_QUARANTINEED_STATE = "challenge_quarantined_state challenged_by_A:Bool signature:bits512 tag:# = tag 1130915665 channel_id:uint128 sch_A:^SignedSemiChannel sch_B:^SignedSemiChannel = InternalMsgBody"c;
-const OP_SETTLE_CONDITIONALS = "settle_conditionals from_A:Bool signature:bits512 tag:# = tag 1131168622 channel_id:uint128 conditionals_to_settle:HashmapE 32 Cell = InternalMsgBody"c;
-const OP_FINISH_UNCOOPERATIVE_CLOSE = "finish_uncooperative_close = InternalMsgBody"c;
-const OP_CHANNEL_CLOSED = "channel_closed channel_id:uint128 = InternalMsgBody"c;
-const OP_CHANNEL_WITHDRAW = "channel_withdraw channel_id:uint128 = InternalMsgBody"c;
+const OP_TOP_UP_BALANCE = 0x593e3893;
+const OP_INIT_CHANNEL = 0x79ae99b5;
+const OP_COOPERATIVE_CLOSE = 0xd2b1eeeb;
+const OP_COOPERATIVE_COMMIT = 0x076bfdf1;
+const OP_START_UNCOOPERATIVE_CLOSE = 0x8175e15d;
+const OP_CHALLENGE_QUARANTINEED_STATE = 0x9a77c0db;
+const OP_SETTLE_CONDITIONALS = 0x56c39b4c;
+const OP_FINISH_UNCOOPERATIVE_CLOSE = 0x25432a91;
+const OP_CHANNEL_CLOSED = 0xdddc88ba;
+const OP_CHANNEL_WITHDRAW = 0xa32f0b3c;
 const OP_JETTON_TRANSFER = 0xf8a7ea5;
 const OP_JETTON_TAKE_WALLET_ADDRESS = 0xd1735400;
 const OP_JETTON_PROVIDE_WALLET_ADDRESS = 0x2c76b973;
 const OP_JETTON_TRANSFER_NOTIFICATION = 0x7362d09c;
 const OP_EXCESSES = 0xd53276db;
+
+const TAG_INIT_CHANNEL = 0x481ebc44;
+const TAG_COOPERATIVE_CLOSE = 0x0802ada3;
+const TAG_COOPERATIVE_COMMIT = 0x668532b6;
+const TAG_START_UNCOOPERATIVE_CLOSE = 0x8c623692;
+const TAG_CHALLENGE_QUARANTINEED_STATE = 0xb8a21379;
+const TAG_SETTLE_CONDITIONALS = 0xf69e0a30;
+const TAG_STATE = 0x43685374;
 
 const STATE_UNINITED = 0;
 const STATE_OPEN = 1;
@@ -247,7 +247,7 @@ fun initChannel(msg: slice) {
     var isA: int = msg.loadInt(1);
     var signature: slice = msg.loadBits(512);
     assert(isSignatureValid(sliceHash(msg), signature, isA ? ctxKeyA : ctxKeyB)) throw ERROR_NOT_AUTHORIZED;
-    assert(msg.loadUint(32) == TAG_INIT) throw ERROR_WRONG_TAG;
+    assert(msg.loadUint(32) == TAG_INIT_CHANNEL) throw ERROR_WRONG_TAG;
     assert(ctxChannelId == msg.loadUint(128)) throw ERROR_WRONG_CHANNEL_ID;
 
     // must be 0, we handle adjustments in topup
@@ -522,7 +522,7 @@ fun challengeQuarantinedState(msg: slice) {
     var challengedByA: int = msg.loadInt(1);
     var signature: slice = msg.loadBits(512);
     assert(isSignatureValid(sliceHash(msg), signature, challengedByA ? ctxKeyA : ctxKeyB)) throw ERROR_NOT_AUTHORIZED;
-    assert(msg.loadUint(32) == TAG_CHALLENGE_STATE) throw ERROR_WRONG_TAG;
+    assert(msg.loadUint(32) == TAG_CHALLENGE_QUARANTINEED_STATE) throw ERROR_WRONG_TAG;
     assert(ctxChannelId == msg.loadUint(128)) throw ERROR_WRONG_CHANNEL_ID;
 
     var semiChannelA: slice = msg.loadRef().beginParse();
