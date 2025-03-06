@@ -347,6 +347,7 @@ fun sendPayoutJetton(sAddr: slice, amount: int, channelId: int, op: int, flags: 
     );
 }
 
+@inline
 fun withdraw(a: int, b: int) {
     // to keep min balance
     reserveToncoinsOnBalance(ctxPaymentConfigStorageFee, 0);
@@ -382,6 +383,7 @@ fun closeChannel() {
     saveStorage();
 }
 
+@inline_ref
 fun cooperativeClose(msg: slice) {
     var sigA: slice = msg.loadRef().beginParse();
     var sigB: slice = msg.loadRef().beginParse();
@@ -406,6 +408,7 @@ fun cooperativeClose(msg: slice) {
     closeChannel();
 }
 
+@inline_ref
 fun cooperativeCommit(msg: slice) {
     var sigA: slice = msg.loadRef().beginParse();
     var sigB: slice = msg.loadRef().beginParse();
@@ -462,6 +465,7 @@ fun parseMaybeSemichannelBody(mutate self: slice): (int, int, int) {
     return (body.loadUint(64), body.loadCoins(), body.loadUint(256));
 }
 
+@inline_ref
 fun startUncooperativeClose(msg: slice) {
     assert(ctxQuarantine == null) throw ERROR_QUARANTINE_ALREADY_ACTIVE;
     var signedByA: int = msg.loadInt(1);
@@ -510,6 +514,7 @@ fun startUncooperativeClose(msg: slice) {
     saveStorage();
 }
 
+@inline_ref
 fun challengeQuarantinedState(msg: slice) {
     assert(ctxQuarantine != null) throw ERROR_NO_QUARANTINED_STATE;
 
@@ -606,6 +611,7 @@ fun challengeQuarantinedState(msg: slice) {
     saveStorage();
 }
 
+@inline_ref
 fun settleConditionals(msg: slice) {
     assert(ctxQuarantine != null) throw ERROR_NO_QUARANTINED_STATE;
 
@@ -680,6 +686,7 @@ fun settleConditionals(msg: slice) {
     saveStorage();
 }
 
+@inline_ref
 fun finishUncooperativeClose() {
     assert(ctxQuarantine != null) throw ERROR_NO_QUARANTINED_STATE;
 
