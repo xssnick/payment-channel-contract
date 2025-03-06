@@ -1,3 +1,4 @@
+import "@stdlib/common.tolk"
 import "@stdlib/gas-payments"
 import "@stdlib/tvm-dicts"
 import "@stdlib/tvm-lowlevel"
@@ -17,9 +18,12 @@ import "@stdlib/tvm-lowlevel"
   conf#_ quarantin_duration:uint32
          misbehavior_fine:Coins
          conditional_close_duration:uint32 = ClosingConfig; // 32 + 132 + 32 = 196
+  payment_type_ec#_ id:(## 32) = PaymentTypeEC;
+  payment_type_jetton#_ wallet:MsgAddress = PaymentTypeJetton;
   payment_conf#_  storage_fee:Coins
                   dest_A:MsgAddress
-                  dest_B:MsgAddress = PaymentConfig;
+                  dest_B:MsgAddress
+                  currency:(Maybe (Either PaymentTypeEC PaymentTypeJetton)) = PaymentConfig;
   channel_state#_ inited:Bool
                   balance_A:Coins balance_B:Coins
                   key_A:uint256 key_B:uint256
@@ -44,10 +48,6 @@ fun castToS2I(c: continuation): (slice -> int)
 asm "NOP";
 
 @pure
-fun tTriple<X, Y, Z>(x: X, y: Y, z: Z): tuple
-asm "TRIPLE";
-
-@pure
 fun emptySlice(): slice
 asm "b{} PUSHSLICE";
 
@@ -55,28 +55,44 @@ asm "b{} PUSHSLICE";
 fun proofHash(c: cell): int
 asm "0 CHASHI";
 
+@pure
+fun storeVarUInt32(b: builder, x: int): builder
+asm "STVARUINT32";
+
+@pure
+fun loadVarUInt32(mutate self: slice): int
+asm(-> 1 0) "LDVARUINT32";
+
 global ctxInited: bool;
 global ctxBalanceA: int;
 global ctxBalanceB: int;
 global ctxKeyA: int;
 global ctxKeyB: int;
 global ctxChannelId: int;
-global ctxClosureConfig: tuple;
 global ctxCommitedSeqnoA: int;
 global ctxCommitedSeqnoB: int;
 global ctxQuarantine: cell;
+
+global ctxClosureConfigRef: cell;
+global ctxClosureConfigQuarantineDuration: int;
+global ctxClosureConfigCloseDuration: int;
+global ctxClosureConfigFine: int;
 
 global ctxPaymentConfigRef: cell;
 global ctxPaymentConfigAddressA: slice;
 global ctxPaymentConfigAddressB: slice;
 global ctxPaymentConfigStorageFee: int;
 
-global ctxUnparsedStorage: slice;
-global ctxStorageParseLevel: int;
+global ctxCurrencyType: int;
+
+global ctxECID: int;
+
+global ctxJettonRoot: slice;
+global ctxJettonWallet: slice;
 
 const ERROR_ALREADY_INITED = 100;
 const ERROR_NOT_AUTHORIZED = 101;
-const ERROR_NOT_ENOUGH_MONEY_FOR_INIT = 102;
+const ERROR_INCORRECT_INITIAL_BALANCE = 102;
 const ERROR_WRONG_TAG = 104;
 const ERROR_OUTDATED_STATE = 105;
 const ERROR_QUARANTINE_ALREADY_ACTIVE = 106;
@@ -93,6 +109,12 @@ const ERROR_INCORRECT_CONDITIONALS_PROOF = 115;
 const ERROR_INCORRECT_UPDATED_PROOF = 116;
 const ERROR_NOT_INITED = 117;
 const ERROR_NOT_ENOUGH_BALANCE = 118;
+const ERROR_AMOUNT_NOT_COVERS_FEE = 119;
+const ERROR_INVALID_CURRENCY_TYPE = 120;
+const ERROR_INVALID_EC_ID = 121;
+const ERROR_NOT_ENOUGH_CONTRACT_BALANCE = 122;
+const ERROR_NOT_ENOUGH_MONEY_FOR_INIT_STORAGE = 123;
+const ERROR_JETTON_WALLET_ALREADY_INSTALLED = 124;
 
 const TAG_INIT = 0x696e6974;
 const TAG_COOPERATIVE_CLOSE = 0x436c6f73;
@@ -107,16 +129,21 @@ const STORAGE_UP_TO_QUARANTINE = 3;
 const STORAGE_UP_TO_CLOSURE_CONFIG = 1;
 const STORAGE_BALANCES_AND_KEYS = 0;
 
-const OP_TOP_UP_BALANCE = "top_up_balance add_A:Coins add_B:Coins = InternalMsgBody"c;
-const OP_INIT_CHANNEL = "init_channel is_A:Bool signature:bits512 tag:# = tag 1768843636 channel_id:uint128 balance_A:Coins balance_B:Coins = InternalMsgBody"c;
+const OP_TOP_UP_BALANCE = "top_up_balance is_A:Bool = InternalMsgBody"c;
+const OP_INIT_CHANNEL = "init_channel is_A:Bool signature:bits512 tag:# = tag 1768843636 channel_id:uint128 = InternalMsgBody"c;
 const OP_COOPERATIVE_CLOSE = "cooperative_close sig_A:^bits512 sig_B:^bits512 tag:# = tag 1131179891 channel_id:uint128 balance_A:Coins balance_B:Coins seqno_A:uint64 seqno_B:uint64 = InternalMsgBody"c;
 const OP_COOPERATIVE_COMMIT = "cooperative_commit sig_A:^bits512 sig_B:^bits512 tag:# = tag 1128492404 channel_id:uint128 seqno_A:uint64 seqno_B:uint64 withdraw_A:Coins withdraw_B:Coins = InternalMsgBody"c;
 const OP_START_UNCOOPERATIVE_CLOSE = "start_uncooperative_close signed_by_A:Bool signature:bits512 tag:# = tag 1433289580 channel_id:uint128 sch_A:^SignedSemiChannel sch_B:^SignedSemiChannel = InternalMsgBody"c;
-const OP_CHALLENGE_QUARANTINEED_STATE = "challenge_QUARANTINEed_state challenged_by_A:Bool signature:bits512 tag:# = tag 1130915665 channel_id:uint128 sch_A:^SignedSemiChannel sch_B:^SignedSemiChannel = InternalMsgBody"c;
+const OP_CHALLENGE_QUARANTINEED_STATE = "challenge_quarantined_state challenged_by_A:Bool signature:bits512 tag:# = tag 1130915665 channel_id:uint128 sch_A:^SignedSemiChannel sch_B:^SignedSemiChannel = InternalMsgBody"c;
 const OP_SETTLE_CONDITIONALS = "settle_conditionals from_A:Bool signature:bits512 tag:# = tag 1131168622 channel_id:uint128 conditionals_to_settle:HashmapE 32 Cell = InternalMsgBody"c;
 const OP_FINISH_UNCOOPERATIVE_CLOSE = "finish_uncooperative_close = InternalMsgBody"c;
 const OP_CHANNEL_CLOSED = "channel_closed channel_id:uint128 = InternalMsgBody"c;
 const OP_CHANNEL_WITHDRAW = "channel_withdraw channel_id:uint128 = InternalMsgBody"c;
+const OP_JETTON_TRANSFER = 0xf8a7ea5;
+const OP_JETTON_TAKE_WALLET_ADDRESS = 0xd1735400;
+const OP_JETTON_PROVIDE_WALLET_ADDRESS = 0x2c76b973;
+const OP_JETTON_TRANSFER_NOTIFICATION = 0x7362d09c;
+const OP_EXCESSES = 0xd53276db;
 
 const STATE_UNINITED = 0;
 const STATE_OPEN = 1;
@@ -124,39 +151,51 @@ const STATE_CLOSURE_STARTED = 2;
 const STATE_SETTLING_CONDITIONALS = 3;
 const STATE_AWAITING_FINALIZATION = 4;
 
+const FEE_JETTON_ACCEPT  = 35000000; // 0.035
+const FEE_JETTON_PAYOUT  = 60000000; // 0.06
+const FEE_JETTON_FORWARD = 30000000; // 0.03
+const FEE_EC_ACCEPT      = 25000000; // 0.025
+const FEE_EC_PAYOUT      = 20000000; // 0.02
+const FEE_TON_ACCEPT     = 20000000; // 0.02
+const FEE_MIN_BALANCE    = 10000000; // 0.01
+const FEE_JETTON_WALLET_PROVIDE = 30000000; // 0.03
+
+const CURRENCY_TYPE_TON = 0;
+const CURRENCY_TYPE_EC = 1;
+const CURRENCY_TYPE_JETTON = 2;
+
+@inline
 fun loadClosureConfig(mutate self: slice): void {
     var conf: slice = self.loadRef().beginParse();
-    ctxClosureConfig = tTriple(conf.loadUint(32), conf.loadCoins(), conf.loadUint(32));
-    return;
+    ctxClosureConfigQuarantineDuration = conf.loadUint(32);
+    ctxClosureConfigFine = conf.loadCoins();
+    ctxClosureConfigCloseDuration = conf.loadUint(32);
 }
 
 @inline
-fun closureConfigQuarantineDuration(): int {
-    return ctxClosureConfig.1;
+fun loadPaymentConfig(mutate self: slice): void {
+    ctxPaymentConfigRef = self.loadRef();
+    var pcs: slice = ctxPaymentConfigRef.beginParse();
+    ctxPaymentConfigStorageFee = pcs.loadCoins();
+    ctxPaymentConfigAddressA = pcs.loadAddress();
+    ctxPaymentConfigAddressB = pcs.loadAddress();
+    var isCustomCurrency: bool = pcs.loadBool();
+    if (isCustomCurrency) {
+        var isEC: bool = pcs.loadBool();
+        if (isEC) {
+            ctxCurrencyType = CURRENCY_TYPE_EC;
+            ctxECID = pcs.loadUint(32);
+        } else {
+            ctxCurrencyType = CURRENCY_TYPE_JETTON;
+            ctxJettonRoot = pcs.loadAddress();
+            ctxJettonWallet = pcs.loadAddress();
+        }
+    } else {
+        ctxCurrencyType = CURRENCY_TYPE_TON;
+    }
 }
 
-@inline
-fun closureConfigMisbehaviorFine(): int {
-    return ctxClosureConfig.2;
-}
-
-@inline
-fun closureConfigConditionalCloseDuration(): int {
-    return ctxClosureConfig.3;
-}
-
-fun storeClosureConfig(b: builder): builder {
-    return b.storeRef(
-        beginCell()
-            .storeUint(closureConfigQuarantineDuration(), 32)
-            .storeCoins(closureConfigMisbehaviorFine())
-            .storeUint(closureConfigConditionalCloseDuration(), 32)
-            .endCell()
-    );
-}
-
-fun loadStorage(level: int) {
-    ctxStorageParseLevel = level;
+fun loadStorage() {
     var cs: slice = getContractData().beginParse();
     ctxInited = cs.loadBool();
     ctxBalanceA = cs.loadCoins();
@@ -165,62 +204,44 @@ fun loadStorage(level: int) {
     ctxKeyB = cs.loadUint(256);
     ctxChannelId = cs.loadUint(128);
     cs.loadClosureConfig();
-    if (level >= STORAGE_UP_TO_QUARANTINE) {
-        ctxCommitedSeqnoA = cs.loadUint(32);
-        ctxCommitedSeqnoB = cs.loadUint(32);
-        ctxQuarantine = cs.loadMaybeRef();
-    }
-    if (level >= STORAGE_FULL) {
-        ctxPaymentConfigRef = cs.loadRef();
-        var pcs: slice = ctxPaymentConfigRef.beginParse();
-        ctxPaymentConfigStorageFee = pcs.loadCoins();
-        ctxPaymentConfigAddressA = pcs.loadAddress();
-        ctxPaymentConfigAddressB = pcs.loadAddress();
-    }
-    ctxUnparsedStorage = cs;
+
+    ctxCommitedSeqnoA = cs.loadUint(32);
+    ctxCommitedSeqnoB = cs.loadUint(32);
+    ctxQuarantine = cs.loadMaybeRef();
+
+    cs.loadPaymentConfig();
 }
 
 fun saveStorage() {
-    var level: int = ctxStorageParseLevel;
-    var storage: builder = beginCell();
-    storage = storage.storeBool(ctxInited)
+    setContractData(beginCell()
+        .storeBool(ctxInited)
         .storeCoins(ctxBalanceA)
         .storeCoins(ctxBalanceB)
         .storeUint(ctxKeyA, 256)
         .storeUint(ctxKeyB, 256)
         .storeUint(ctxChannelId, 128)
-        .storeClosureConfig();
-    if (level >= STORAGE_UP_TO_QUARANTINE) {
-        storage = storage.storeUint(ctxCommitedSeqnoA, 32)
-            .storeUint(ctxCommitedSeqnoB, 32)
-            .storeMaybeRef(ctxQuarantine);
-    }
-    if (level >= STORAGE_FULL) {
-        storage = storage.storeRef(ctxPaymentConfigRef);
-    } else {
-        storage = storage.storeSlice(ctxUnparsedStorage);
-    }
-    setContractData(storage.endCell());
+        .storeRef(ctxClosureConfigRef)
+        .storeUint(ctxCommitedSeqnoA, 32)
+        .storeUint(ctxCommitedSeqnoB, 32)
+        .storeMaybeRef(ctxQuarantine)
+        .storeRef(ctxPaymentConfigRef)
+    .endCell());
 }
 
 fun topUpBalance(amount: int, msg: slice) {
-    loadStorage(STORAGE_FULL);
     assert(ctxInited) throw ERROR_NOT_INITED;
 
     var isA: bool = msg.loadBool();
     if (isA) {
-        assert(ctxBalanceA <= amount) throw ERROR_NOT_ENOUGH_MONEY_FOR_INIT;
-        ctxBalanceA += msg.loadCoins();
+        ctxBalanceA += amount;
     } else {
-        assert(ctxBalanceB <= amount) throw ERROR_NOT_ENOUGH_MONEY_FOR_INIT;
-        ctxBalanceB += msg.loadCoins();
+        ctxBalanceB += amount;
     }
 
     return saveStorage();
 }
 
-fun initChannel(contractBalance: int, msg: slice) {
-    loadStorage(STORAGE_FULL);
+fun initChannel(msg: slice) {
     assert(!ctxInited) throw ERROR_ALREADY_INITED;
 
     var isA: int = msg.loadInt(1);
@@ -229,44 +250,117 @@ fun initChannel(contractBalance: int, msg: slice) {
     assert(msg.loadUint(32) == TAG_INIT) throw ERROR_WRONG_TAG;
     assert(ctxChannelId == msg.loadUint(128)) throw ERROR_WRONG_CHANNEL_ID;
 
-    var setBalanceA: int = msg.loadCoins();
-    var setBalanceB: int = msg.loadCoins();
-    assert((setBalanceA >= ctxBalanceA) & (setBalanceB >= ctxBalanceB)) throw ERROR_NOT_ENOUGH_MONEY_FOR_INIT;
-
-    ctxBalanceA = setBalanceA;
-    ctxBalanceB = setBalanceB;
-
-    assert(ctxBalanceA + ctxBalanceB + ctxPaymentConfigStorageFee < contractBalance) throw ERROR_NOT_ENOUGH_MONEY_FOR_INIT;
+    // must be 0, we handle adjustments in topup
+    assert((ctxBalanceA | ctxBalanceB) == 0) throw ERROR_INCORRECT_INITIAL_BALANCE;
 
     ctxInited = true;
+
+    var storageMin: int = FEE_MIN_BALANCE;
+    if (ctxCurrencyType == CURRENCY_TYPE_JETTON) {
+        // must keep fee for final withdrawal
+        storageMin += (FEE_JETTON_PAYOUT * 2) + FEE_JETTON_WALLET_PROVIDE;
+        if (ctxJettonWallet.addressIsNone()) {
+            // request our wallet address from jetton master
+            requestJettonWallet();
+        }
+    } else if (ctxCurrencyType == CURRENCY_TYPE_EC) {
+        storageMin += FEE_EC_PAYOUT * 2;
+    }
+
+    assert((ctxPaymentConfigStorageFee > storageMin) &
+        (getMyOriginalBalance() > ctxPaymentConfigStorageFee)) throw ERROR_NOT_ENOUGH_MONEY_FOR_INIT_STORAGE;
+
     return saveStorage();
 }
 
+@inline_ref
 fun sendPayout(sAddr: slice, amount: int, channelId: int, op: int, flags: int) {
+    if (ctxCurrencyType == CURRENCY_TYPE_TON) {
+        sendPayoutTon(sAddr, amount, channelId, op, flags);
+    } else if (ctxCurrencyType == CURRENCY_TYPE_JETTON) {
+        sendPayoutJetton(sAddr, amount, channelId, op, flags);
+    } else if (ctxCurrencyType == CURRENCY_TYPE_EC) {
+        sendPayoutEC(sAddr, amount, channelId, op, flags);
+    }
+}
+
+@inline
+fun sendPayoutTon(sAddr: slice, amount: int, channelId: int, op: int, flags: int) {
     sendMessage(
         beginCell()
-            .storeUint(0x10, 6)                  // 0x10 = 0b010000 = {0, 1, 0, 0, 00}
-            .storeSlice(sAddr)                   // destination address
-            .storeCoins(amount)                  // stake value
-            .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)   // no extra currency collection
-            .storeUint(op, 32)                   // operation type
-            .storeUint(channelId, 128)           // channel ID
+            .storeUint(NON_BOUNCEABLE, 6)
+            .storeSlice(sAddr)
+            .storeCoins(amount)
+            .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+            .storeUint(op, 32)
+            .storeUint(channelId, 128)
+            .endCell(),
+        flags
+    );
+}
+
+@inline
+fun sendPayoutEC(sAddr: slice, amount: int, channelId: int, op: int, flags: int) {
+    var currenciesToSend: cell = createEmptyDict();
+    currenciesToSend.uDictSetBuilder(32, ctxECID, beginCell().storeVarUInt32(amount));
+
+    sendMessage(
+        beginCell()
+            .storeUint(NON_BOUNCEABLE, 6)
+            .storeSlice(sAddr)
+            .storeCoins(FEE_EC_PAYOUT)
+            .storeDict(currenciesToSend)
+            .storeUint(0, 4 + 4 + 64 + 32 + 1 + 1)
+            .storeUint(op, 32)
+            .storeUint(channelId, 128)
+            .endCell(),
+        flags
+    );
+}
+
+@inline
+fun sendPayoutJetton(sAddr: slice, amount: int, channelId: int, op: int, flags: int) {
+    /*
+      transfer query_id:uint64 amount:(VarUInteger 16) destination:MsgAddress
+               response_destination:MsgAddress custom_payload:(Maybe ^Cell)
+               forward_ton_amount:(VarUInteger 16) forward_payload:(Either Cell ^Cell)
+               = InternalMsgBody; 32 + 64 + 124 + 267 + 267 + 1 + 5  + 1
+    */
+    sendMessage(
+        beginCell()
+            .storeUint(NON_BOUNCEABLE, 6)
+            .storeSlice(ctxJettonWallet)
+            .storeCoins(FEE_JETTON_PAYOUT)
+            .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+            .storeUint(OP_JETTON_TRANSFER, 32)
+            .storeUint(0, 64)
+            .storeCoins(amount)
+            .storeSlice(sAddr)
+            .storeSlice(sAddr)
+            .storeMaybeRef(null)
+            .storeCoins(FEE_JETTON_FORWARD)
+            .storeBool(false)
+            .storeUint(op, 32)
+            .storeUint(channelId, 128)
             .endCell(),
         flags
     );
 }
 
 fun withdraw(a: int, b: int) {
+    // to keep min balance
+    reserveToncoinsOnBalance(ctxPaymentConfigStorageFee, 0);
+
     if (b > 0) {
         ctxBalanceB -= b;
         assert(ctxBalanceB >= 0, ERROR_NOT_ENOUGH_BALANCE);
-        sendPayout(ctxPaymentConfigAddressB, b, ctxChannelId, OP_CHANNEL_WITHDRAW, 2);
+        sendPayout(ctxPaymentConfigAddressB, b, ctxChannelId, OP_CHANNEL_WITHDRAW, 0);
     }
 
     if (a > 0) {
         ctxBalanceA -= a;
         assert(ctxBalanceA >= 0, ERROR_NOT_ENOUGH_BALANCE);
-        sendPayout(ctxPaymentConfigAddressA, a, ctxChannelId, OP_CHANNEL_WITHDRAW, 2);
+        sendPayout(ctxPaymentConfigAddressA, a, ctxChannelId, OP_CHANNEL_WITHDRAW, 0);
     }
 }
 
@@ -289,8 +383,6 @@ fun closeChannel() {
 }
 
 fun cooperativeClose(msg: slice) {
-    loadStorage(STORAGE_FULL);
-
     var sigA: slice = msg.loadRef().beginParse();
     var sigB: slice = msg.loadRef().beginParse();
 
@@ -311,13 +403,10 @@ fun cooperativeClose(msg: slice) {
     ctxCommitedSeqnoA = newSeqnoA;
     ctxCommitedSeqnoB = newSeqnoB;
 
-    acceptExternalMessage();
     closeChannel();
 }
 
 fun cooperativeCommit(msg: slice) {
-    loadStorage(STORAGE_UP_TO_QUARANTINE);
-
     var sigA: slice = msg.loadRef().beginParse();
     var sigB: slice = msg.loadRef().beginParse();
 
@@ -349,8 +438,6 @@ fun cooperativeCommit(msg: slice) {
     var withdrawA: int = msg.loadCoins();
     var withdrawB: int = msg.loadCoins();
 
-    acceptExternalMessage();
-
     if ((withdrawA | withdrawB) > 0) {
         withdraw(withdrawA, withdrawB);
     }
@@ -376,8 +463,6 @@ fun parseMaybeSemichannelBody(mutate self: slice): (int, int, int) {
 }
 
 fun startUncooperativeClose(msg: slice) {
-    loadStorage(STORAGE_UP_TO_QUARANTINE);
-
     assert(ctxQuarantine == null) throw ERROR_QUARANTINE_ALREADY_ACTIVE;
     var signedByA: int = msg.loadInt(1);
     var signature: slice = msg.loadBits(512);
@@ -422,12 +507,10 @@ fun startUncooperativeClose(msg: slice) {
         .storeBool(false)
         .endCell();
 
-    acceptExternalMessage();
     saveStorage();
 }
 
 fun challengeQuarantinedState(msg: slice) {
-    loadStorage(STORAGE_UP_TO_QUARANTINE);
     assert(ctxQuarantine != null) throw ERROR_NO_QUARANTINED_STATE;
 
     // Start with the same checks
@@ -477,7 +560,7 @@ fun challengeQuarantinedState(msg: slice) {
     var storedConditionalsHashB: int = storedStates.loadUint(256);
 
     var quarantineeStarted: int = storedStates.loadUint(32);
-    assert(quarantineeStarted + closureConfigQuarantineDuration() > now()) throw ERROR_TOO_LATE_FOR_QUARANTINE_CHALLENGE;
+    assert(quarantineeStarted + ctxClosureConfigQuarantineDuration > now()) throw ERROR_TOO_LATE_FOR_QUARANTINE_CHALLENGE;
 
     var prevSignedByA: int = storedStates.loadInt(1);
     var quarantineeChallenged: int = storedStates.loadInt(1);
@@ -503,9 +586,9 @@ fun challengeQuarantinedState(msg: slice) {
     if (misbehaviorDetected) {
         // add fine to sent
         if (prevSignedByA) {
-            storedSentA += closureConfigMisbehaviorFine();
+            storedSentA += ctxClosureConfigFine;
         } else {
-            storedSentB += closureConfigMisbehaviorFine();
+            storedSentB += ctxClosureConfigFine;
         }
     }
 
@@ -524,8 +607,6 @@ fun challengeQuarantinedState(msg: slice) {
 }
 
 fun settleConditionals(msg: slice) {
-    loadStorage(STORAGE_UP_TO_QUARANTINE);
-
     assert(ctxQuarantine != null) throw ERROR_NO_QUARANTINED_STATE;
 
     var fromA: int = msg.loadInt(1);
@@ -545,9 +626,9 @@ fun settleConditionals(msg: slice) {
         (storedStates.loadUint(64), storedStates.loadCoins(), storedStates.loadUint(256));
 
     var quarantineeStarted: int = storedStates.loadUint(32);
-    var quarantineeFinished: int = quarantineeStarted + closureConfigQuarantineDuration();
+    var quarantineeFinished: int = quarantineeStarted + ctxClosureConfigQuarantineDuration;
     assert(quarantineeFinished < now()) throw ERROR_QUARANTINE_NOT_FINISHED;
-    assert(quarantineeFinished + closureConfigConditionalCloseDuration() > now()) throw ERROR_TOO_LATE_TO_SETTLE_CONDITIONALS;
+    assert(quarantineeFinished + ctxClosureConfigCloseDuration > now()) throw ERROR_TOO_LATE_TO_SETTLE_CONDITIONALS;
 
     var stateCommitedByA: int = storedStates.loadInt(1);
     var challenged: int = storedStates.loadInt(1);
@@ -600,8 +681,6 @@ fun settleConditionals(msg: slice) {
 }
 
 fun finishUncooperativeClose() {
-    loadStorage(STORAGE_FULL);
-
     assert(ctxQuarantine != null) throw ERROR_NO_QUARANTINED_STATE;
 
     var storedStates: slice = ctxQuarantine.beginParse();
@@ -612,10 +691,8 @@ fun finishUncooperativeClose() {
 
     var quarantineeStarted: int = storedStates.loadUint(32);
     assert(quarantineeStarted +
-        closureConfigQuarantineDuration() +
-        closureConfigConditionalCloseDuration() < now()) throw ERROR_TOO_EARLY_TO_CLOSE;
-
-    acceptExternalMessage();
+        ctxClosureConfigQuarantineDuration +
+        ctxClosureConfigCloseDuration < now()) throw ERROR_TOO_EARLY_TO_CLOSE;
 
     ctxBalanceA = ctxBalanceA + sentB - sentA;
     ctxBalanceB = ctxBalanceB + sentA - sentB;
@@ -633,44 +710,192 @@ fun finishUncooperativeClose() {
     closeChannel();
 }
 
-fun onInternalMessage(contractBalance: int, amount: int, _: cell, inMsg: slice) {
+fun onInternalMessage(_: int, _: int, inMsgFull: cell, inMsg: slice) {
+    loadStorage();
+
+    var cs: slice = inMsgFull.beginParse();
+    var flags: int = cs.loadUint(4);
+    if (flags & 1) {
+        // bounced
+        return;
+    }
+    cs.skipBits(4);
+    var sender: slice = cs.loadAddress();
+    var amount: int = cs.loadCoins();
+
     // Note, operators of channels are always off-chain parties, not contracts
     // thus no responses and query_ids
     var op: int = inMsg.loadUint(32);
     if (op == OP_TOP_UP_BALANCE) {
-        return topUpBalance(amount, inMsg);
+        if (ctxCurrencyType == CURRENCY_TYPE_EC) {
+            assert(amount >= FEE_EC_ACCEPT) throw ERROR_AMOUNT_NOT_COVERS_FEE;
+
+            var ec: cell = cs.loadDict();
+            var (v: slice, ok: bool) = ec.uDictGet(32, ctxECID);
+            assert(ok) throw ERROR_INVALID_EC_ID;
+
+            var ecAmount: int = v.loadVarUInt32();
+            topUpBalance(ecAmount, inMsg);
+        } else {
+            assert(amount >= FEE_TON_ACCEPT) throw ERROR_AMOUNT_NOT_COVERS_FEE;
+
+            topUpBalance(amount - FEE_TON_ACCEPT, inMsg);
+        }
+    } else if (op == OP_JETTON_TRANSFER_NOTIFICATION) {
+        // return because custom excess handled inside
+        return acceptJettons(sender, amount, inMsg);
+    } else if (op == OP_JETTON_TAKE_WALLET_ADDRESS) {
+        // no excess
+        return assignJettonWallet(sender, inMsg);
     } else if (op == OP_COOPERATIVE_COMMIT) {
-        return cooperativeCommit(inMsg);
+        cooperativeCommit(inMsg);
     } else if (op == OP_INIT_CHANNEL) {
-        return initChannel(contractBalance, inMsg);
+        initChannel(inMsg);
     } else if (op == OP_COOPERATIVE_CLOSE) {
-        return cooperativeClose(inMsg);
+        cooperativeClose(inMsg);
     } else if (op == OP_START_UNCOOPERATIVE_CLOSE) {
-        return startUncooperativeClose(inMsg);
+        startUncooperativeClose(inMsg);
     } else if (op == OP_CHALLENGE_QUARANTINEED_STATE) {
-        return challengeQuarantinedState(inMsg);
+        challengeQuarantinedState(inMsg);
     } else if (op == OP_SETTLE_CONDITIONALS) {
-        return settleConditionals(inMsg);
+        settleConditionals(inMsg);
     } else if (op == OP_FINISH_UNCOOPERATIVE_CLOSE) {
-        return finishUncooperativeClose();
+        finishUncooperativeClose();
+    } else {
+        throw 0xffff;
     }
-    throw 0xffff;
+
+    sendExcess(sender);
 }
 
-fun onExternalMessage(_: int, _: int, _: cell, inMsg: slice) {
-    // Note, only cooperative_close and cooperative_commit
-    // will be accepted
-    var op: int = inMsg.loadUint(32);
-    if (op == OP_COOPERATIVE_CLOSE) {
-        return cooperativeClose(inMsg);
-    } else if (op == OP_COOPERATIVE_COMMIT) {
-        return cooperativeCommit(inMsg);
+@inline_ref
+fun acceptJettons(sender: slice, tonAmount: int, payload: slice) {
+    /* TEP-74
+      transfer_notification#7362d09c query_id:uint64 amount:(VarUInteger 16)
+                                     sender:MsgAddress forward_payload:(Either Cell ^Cell)
+                                     = InternalMsgBody;
+    */
+    assert(ctxCurrencyType == CURRENCY_TYPE_JETTON) throw ERROR_INVALID_CURRENCY_TYPE;
+
+    payload.skipBits(64);
+    var jettonAmount: int = payload.loadCoins();
+
+    var jettonSender: slice = payload.loadAddress();
+    var eitherForwardPayload: bool = payload.loadBool();
+    var forwardPayload: slice = eitherForwardPayload ? payload.loadRef().beginParse() : payload;
+
+    if ((tonAmount < FEE_JETTON_ACCEPT) | (!isSliceBitsEqual(ctxJettonWallet, sender))) {
+        return sendJettonsBack(jettonSender, jettonAmount, sender);
     }
-    throw 0xffff;
+
+    try {
+        var innerOp: int = forwardPayload.loadInt(32);
+        if (innerOp == OP_TOP_UP_BALANCE) {
+            topUpBalance(jettonAmount, forwardPayload);
+            return sendExcess(jettonSender);
+        }
+        throw 0xffff;
+    } catch {
+        sendJettonsBack(jettonSender, jettonAmount, sender);
+    }
+}
+
+@inline_ref
+fun sendJettonsBack(dest: slice, amount: int, jettonWallet: slice) {
+    /*
+      transfer query_id:uint64 amount:(VarUInteger 16) destination:MsgAddress
+               response_destination:MsgAddress custom_payload:(Maybe ^Cell)
+               forward_ton_amount:(VarUInteger 16) forward_payload:(Either Cell ^Cell)
+               = InternalMsgBody; 32 + 64 + 124 + 267 + 267 + 1 + 5  + 1
+    */
+    sendMessage(
+        beginCell()
+            .storeUint(NON_BOUNCEABLE, 6)
+            .storeSlice(jettonWallet)
+            .storeCoins(0)
+            .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+                .storeUint(OP_JETTON_TRANSFER, 32)
+                .storeUint(0, 64)
+                .storeCoins(amount)
+                .storeSlice(dest)
+                .storeSlice(dest)
+                .storeMaybeRef(null)
+                .storeCoins(1)
+                .storeBool(false)
+            .endCell(),
+        64 | 2
+    );
+}
+
+@inline_ref
+fun sendExcess(dest: slice) {
+    var reserve: int = ctxPaymentConfigStorageFee;
+    if (ctxCurrencyType == CURRENCY_TYPE_TON) {
+        reserve += ctxBalanceA + ctxBalanceB;
+    }
+    reserveToncoinsOnBalance(reserve, 0);
+
+    sendMessage(
+        beginCell()
+            .storeUint(NON_BOUNCEABLE, 6)
+            .storeSlice(dest)
+            .storeCoins(0)
+            .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+            .storeUint(OP_EXCESSES, 32)
+            .storeUint(0, 64)
+            .endCell(),
+        128 | 2
+    );
+}
+
+@inline_ref
+fun assignJettonWallet(sender: slice, payload: slice) {
+    /* TEP-89
+      take_wallet_address#d1735400 query_id:uint64 wallet_address:MsgAddress
+                                   owner_address:(Maybe ^MsgAddress)
+                                   = InternalMsgBody;
+    */
+    payload.skipBits(64);
+
+    assert(ctxJettonWallet.addressIsNone()) throw ERROR_JETTON_WALLET_ALREADY_INSTALLED;
+    assert(isSliceBitsEqual(ctxJettonRoot, sender)) throw ERROR_NOT_AUTHORIZED;
+
+    ctxJettonWallet = payload.loadAddress();
+
+    ctxPaymentConfigRef = beginCell()
+        .storeCoins(ctxPaymentConfigStorageFee)
+        .storeSlice(ctxPaymentConfigAddressA)
+        .storeSlice(ctxPaymentConfigAddressB)
+        .storeUint(3,2) // maybe either jetton
+        .storeSlice(ctxJettonRoot)
+        .storeSlice(ctxJettonWallet)
+    .endCell();
+
+    saveStorage();
+}
+
+@inline_ref
+fun requestJettonWallet() {
+    /* TEP-89
+      provide_wallet_address#2c76b973 query_id:uint64 owner_address:MsgAddress
+                                      include_address:Bool
+                                      = InternalMsgBody;
+    */
+    sendMessage(beginCell()
+        .storeUint(NON_BOUNCEABLE, 6)
+        .storeSlice(ctxJettonRoot)
+        .storeCoins(FEE_JETTON_WALLET_PROVIDE)
+        .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+        .storeUint(OP_JETTON_PROVIDE_WALLET_ADDRESS, 32)
+        .storeUint(0, 64)
+        .storeSlice(getMyAddress())
+        .storeBool(false)
+    .endCell(), 0);
+    return;
 }
 
 get getChannelState(): int {
-    loadStorage(STORAGE_FULL);
+    loadStorage();
 
     if (!ctxInited) {
         return STATE_UNINITED;
@@ -687,13 +912,13 @@ get getChannelState(): int {
     storedStates.skipBits(1);
 
     var quarantineeStarted: int = storedStates.loadUint(32);
-    if (quarantineeStarted + closureConfigQuarantineDuration() > now()) {
+    if (quarantineeStarted + ctxClosureConfigQuarantineDuration > now()) {
         return STATE_CLOSURE_STARTED;
     }
 
     if (quarantineeStarted +
-    closureConfigQuarantineDuration() +
-    closureConfigConditionalCloseDuration() > now()) {
+        ctxClosureConfigQuarantineDuration +
+        ctxClosureConfigCloseDuration > now()) {
         return STATE_SETTLING_CONDITIONALS;
     }
 
@@ -701,13 +926,13 @@ get getChannelState(): int {
 }
 
 get getChannelData() {
-    loadStorage(STORAGE_FULL);
+    loadStorage();
 
     return (getChannelState(),
         [ctxBalanceA, ctxBalanceB],
         [ctxKeyA, ctxKeyB],
         ctxChannelId,
-        ctxClosureConfig,
+        ctxClosureConfigRef,
         [ctxCommitedSeqnoA, ctxCommitedSeqnoB],
         ctxQuarantine,
         [ctxPaymentConfigStorageFee, ctxPaymentConfigAddressA, ctxPaymentConfigAddressB]);
