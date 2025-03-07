@@ -3,38 +3,6 @@ import "@stdlib/gas-payments"
 import "@stdlib/tvm-dicts"
 import "@stdlib/tvm-lowlevel"
 
-/*
-  cp#_ amount:Coins condition:Cell = ConditionalPayment;
-  sc_body#_ seqno:uint64 sent:Coins conditionals_hash:uint256     ;;:(HashmapE 32 ConditionalPayment)
-            = SemiChannelBody; // 64+132+256 = 452
-  semichannel_state#43685374 channel_id:uint128 data:SemiChannelBody counterparty_data:(Maybe ^SemiChannelBody)
-                        = SemiChannel; // 32 + 128 + 452 + 1 = 613
-  signed_schs#_ signature:bits512 state:^SemiChannel = SignedSemiChannel; // 512 = 512
-  quarantined_state#_ state_A:^SemiChannelBody state_B:^SemiChannelBody
-                     quarantine_starts:uint32
-                     state_commited_by_A:Bool
-                     state_challenged:Bool
-                     = QuarantinedState; // 32 + 1 + 1 = 34
-  conf#_ quarantin_duration:uint32
-         misbehavior_fine:Coins
-         conditional_close_duration:uint32 = ClosingConfig; // 32 + 132 + 32 = 196
-  payment_type_ec#_ id:(## 32) = PaymentTypeEC;
-  payment_type_jetton#_ wallet:MsgAddress = PaymentTypeJetton;
-  payment_conf#_  storage_fee:Coins
-                  dest_A:MsgAddress
-                  dest_B:MsgAddress
-                  currency:(Maybe (Either PaymentTypeEC PaymentTypeJetton)) = PaymentConfig;
-  channel_state#_ inited:Bool
-                  balance_A:Coins balance_B:Coins
-                  key_A:uint256 key_B:uint256
-                  channel_id:uint128
-                  config:^ClosingConfig
-                  commited_seqno_A:uint32 commited_seqno_B:uint32
-                  quarantin:(Maybe ^QuarantinedState)
-                  payments:^PaymentConfig = Storage;
-                  // 1 + 132 + 132 + 256 + 256 + 128 + 32 + 32 + 1 = 970
-*/
-
 @pure
 fun isUdictReplaceGet(dict: cell, keyLen: int, index: int, value: slice): (cell, slice, int)
 asm(value index dict keyLen) "DICTUREPLACEGET" "NULLSWAPIFNOT";
@@ -98,7 +66,6 @@ const ERROR_OUTDATED_STATE = 105;
 const ERROR_QUARANTINE_ALREADY_ACTIVE = 106;
 const ERROR_NO_QUARANTINED_STATE = 107;
 const ERROR_SEQNO_REGRESS = 108;
-const ERROR_QUARANTINEE_ALREADY_CHALLENGED = 115;
 const ERROR_UNAUTHORIZED_CHALLENGE = 109;
 const ERROR_QUARANTINE_NOT_FINISHED = 110;
 const ERROR_TOO_LATE_FOR_QUARANTINE_CHALLENGE = 111;
@@ -115,6 +82,7 @@ const ERROR_INVALID_EC_ID = 121;
 const ERROR_NOT_ENOUGH_CONTRACT_BALANCE = 122;
 const ERROR_NOT_ENOUGH_MONEY_FOR_INIT_STORAGE = 123;
 const ERROR_JETTON_WALLET_ALREADY_INSTALLED = 124;
+const ERROR_QUARANTINEE_ALREADY_CHALLENGED = 125;
 
 const STORAGE_FULL = 4;
 const STORAGE_UP_TO_QUARANTINE = 3;
@@ -139,10 +107,10 @@ const OP_EXCESSES = 0xd53276db;
 
 const TAG_INIT_CHANNEL = 0x481ebc44;
 const TAG_COOPERATIVE_CLOSE = 0x0802ada3;
-const TAG_COOPERATIVE_COMMIT = 0x668532b6;
+const TAG_COOPERATIVE_COMMIT = 0x48baa61a;
 const TAG_START_UNCOOPERATIVE_CLOSE = 0x8c623692;
 const TAG_CHALLENGE_QUARANTINEED_STATE = 0xb8a21379;
-const TAG_SETTLE_CONDITIONALS = 0xf69e0a30;
+const TAG_SETTLE_CONDITIONALS = 0x14588aab;
 const TAG_STATE = 0x43685374;
 
 const STATE_UNINITED = 0;
@@ -152,11 +120,11 @@ const STATE_SETTLING_CONDITIONALS = 3;
 const STATE_AWAITING_FINALIZATION = 4;
 
 const FEE_JETTON_ACCEPT  = 35000000; // 0.035
-const FEE_JETTON_PAYOUT  = 60000000; // 0.06
-const FEE_JETTON_FORWARD = 30000000; // 0.03
+const FEE_JETTON_PAYOUT  = 80000000; // 0.08
+const FEE_JETTON_FORWARD = 35000000; // 0.03
 const FEE_EC_ACCEPT      = 25000000; // 0.025
-const FEE_EC_PAYOUT      = 20000000; // 0.02
-const FEE_TON_ACCEPT     = 20000000; // 0.02
+const FEE_EC_PAYOUT      = 30000000; // 0.03
+const FEE_TON_ACCEPT     = 30000000; // 0.03
 const FEE_MIN_BALANCE    = 10000000; // 0.01
 const FEE_JETTON_WALLET_PROVIDE = 30000000; // 0.03
 
@@ -166,7 +134,8 @@ const CURRENCY_TYPE_JETTON = 2;
 
 @inline
 fun loadClosureConfig(mutate self: slice): void {
-    var conf: slice = self.loadRef().beginParse();
+    ctxClosureConfigRef = self.loadRef();
+    var conf: slice = ctxClosureConfigRef.beginParse();
     ctxClosureConfigQuarantineDuration = conf.loadUint(32);
     ctxClosureConfigFine = conf.loadCoins();
     ctxClosureConfigCloseDuration = conf.loadUint(32);
@@ -181,14 +150,15 @@ fun loadPaymentConfig(mutate self: slice): void {
     ctxPaymentConfigAddressB = pcs.loadAddress();
     var isCustomCurrency: bool = pcs.loadBool();
     if (isCustomCurrency) {
-        var isEC: bool = pcs.loadBool();
-        if (isEC) {
+        var isJetton: bool = pcs.loadBool();
+        if (isJetton) {
+            var j: slice = pcs.loadRef().beginParse();
+            ctxCurrencyType = CURRENCY_TYPE_JETTON;
+            ctxJettonRoot = j.loadAddress();
+            ctxJettonWallet = j.loadAddress();
+        } else {
             ctxCurrencyType = CURRENCY_TYPE_EC;
             ctxECID = pcs.loadUint(32);
-        } else {
-            ctxCurrencyType = CURRENCY_TYPE_JETTON;
-            ctxJettonRoot = pcs.loadAddress();
-            ctxJettonWallet = pcs.loadAddress();
         }
     } else {
         ctxCurrencyType = CURRENCY_TYPE_TON;
@@ -268,7 +238,7 @@ fun initChannel(msg: slice) {
     }
 
     assert((ctxPaymentConfigStorageFee > storageMin) &
-        (getMyOriginalBalance() > ctxPaymentConfigStorageFee)) throw ERROR_NOT_ENOUGH_MONEY_FOR_INIT_STORAGE;
+        (getMyOriginalBalance() >= ctxPaymentConfigStorageFee)) throw ERROR_NOT_ENOUGH_MONEY_FOR_INIT_STORAGE;
 
     return saveStorage();
 }
@@ -294,7 +264,7 @@ fun sendPayoutTon(sAddr: slice, amount: int, channelId: int, op: int, flags: int
             .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
             .storeUint(op, 32)
             .storeUint(channelId, 128)
-            .endCell(),
+        .endCell(),
         flags
     );
 }
@@ -313,7 +283,7 @@ fun sendPayoutEC(sAddr: slice, amount: int, channelId: int, op: int, flags: int)
             .storeUint(0, 4 + 4 + 64 + 32 + 1 + 1)
             .storeUint(op, 32)
             .storeUint(channelId, 128)
-            .endCell(),
+        .endCell(),
         flags
     );
 }
@@ -331,48 +301,44 @@ fun sendPayoutJetton(sAddr: slice, amount: int, channelId: int, op: int, flags: 
             .storeUint(NON_BOUNCEABLE, 6)
             .storeSlice(ctxJettonWallet)
             .storeCoins(FEE_JETTON_PAYOUT)
-            .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
-            .storeUint(OP_JETTON_TRANSFER, 32)
-            .storeUint(0, 64)
-            .storeCoins(amount)
-            .storeSlice(sAddr)
-            .storeSlice(sAddr)
-            .storeMaybeRef(null)
-            .storeCoins(FEE_JETTON_FORWARD)
-            .storeBool(false)
-            .storeUint(op, 32)
-            .storeUint(channelId, 128)
-            .endCell(),
+            .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1)
+            .storeBool(true)
+            .storeRef(beginCell()
+                .storeUint(OP_JETTON_TRANSFER, 32)
+                .storeUint(0, 64)
+                .storeCoins(amount)
+                .storeSlice(sAddr)
+                .storeSlice(sAddr)
+                .storeMaybeRef(null)
+                .storeCoins(FEE_JETTON_FORWARD)
+                .storeBool(true)
+                .storeUint(op, 32)
+                .storeUint(channelId, 128)
+            .endCell())
+        .endCell(),
         flags
     );
 }
 
 @inline
 fun withdraw(a: int, b: int) {
-    // to keep min balance
-    reserveToncoinsOnBalance(ctxPaymentConfigStorageFee, 0);
-
     if (b > 0) {
         ctxBalanceB -= b;
-        assert(ctxBalanceB >= 0, ERROR_NOT_ENOUGH_BALANCE);
+        assert(ctxBalanceB >= 0) throw ERROR_NOT_ENOUGH_BALANCE;
         sendPayout(ctxPaymentConfigAddressB, b, ctxChannelId, OP_CHANNEL_WITHDRAW, 0);
     }
 
     if (a > 0) {
         ctxBalanceA -= a;
-        assert(ctxBalanceA >= 0, ERROR_NOT_ENOUGH_BALANCE);
+        assert(ctxBalanceA >= 0) throw ERROR_NOT_ENOUGH_BALANCE;
         sendPayout(ctxPaymentConfigAddressA, a, ctxChannelId, OP_CHANNEL_WITHDRAW, 0);
     }
 }
 
 fun closeChannel() {
-    var totalContractBalance: int = getMyOriginalBalance();
-    var modeB: int = 2;  // in case balanceB less than forward fees
-    if (ctxBalanceB > totalContractBalance) {
-        modeB = 128;
-    }
-    sendPayout(ctxPaymentConfigAddressB, ctxBalanceB, ctxChannelId, OP_CHANNEL_CLOSED, modeB);
-    sendPayout(ctxPaymentConfigAddressA, ctxBalanceA, ctxChannelId, OP_CHANNEL_CLOSED, 2 + 128);
+    sendPayout(ctxPaymentConfigAddressB, ctxBalanceB, ctxChannelId, OP_CHANNEL_CLOSED, SEND_MODE_IGNORE_ERRORS);
+    // side A is considered to be deployer, so he will get rest contract's ton balance
+    sendPayout(ctxPaymentConfigAddressA, ctxBalanceA, ctxChannelId, OP_CHANNEL_CLOSED, SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS);
 
     // while channel contract will be emptied it will survive for some time
     // by clearing storage we allow immediately reopen channel with the same configs
@@ -418,6 +384,9 @@ fun cooperativeCommit(msg: slice) {
     assert(ctxChannelId == msg.loadUint(128)) throw ERROR_WRONG_CHANNEL_ID;
     assert(isSignatureValid(hash, sigA, ctxKeyA) &
         isSignatureValid(hash, sigB, ctxKeyB)) throw ERROR_NOT_AUTHORIZED;
+
+    ctxBalanceA = msg.loadCoins();
+    ctxBalanceB = msg.loadCoins();
 
     var newSeqnoA: int = msg.loadUint(64);
     var newSeqnoB: int = msg.loadUint(64);
@@ -717,7 +686,7 @@ fun finishUncooperativeClose() {
     closeChannel();
 }
 
-fun onInternalMessage(_: int, _: int, inMsgFull: cell, inMsg: slice) {
+fun onInternalMessage(_: int, amount: int, inMsgFull: cell, inMsg: slice) {
     loadStorage();
 
     var cs: slice = inMsgFull.beginParse();
@@ -726,9 +695,7 @@ fun onInternalMessage(_: int, _: int, inMsgFull: cell, inMsg: slice) {
         // bounced
         return;
     }
-    cs.skipBits(4);
     var sender: slice = cs.loadAddress();
-    var amount: int = cs.loadCoins();
 
     // Note, operators of channels are always off-chain parties, not contracts
     // thus no responses and query_ids
@@ -759,7 +726,8 @@ fun onInternalMessage(_: int, _: int, inMsgFull: cell, inMsg: slice) {
     } else if (op == OP_INIT_CHANNEL) {
         initChannel(inMsg);
     } else if (op == OP_COOPERATIVE_CLOSE) {
-        cooperativeClose(inMsg);
+        // excess hadled in channelClose()
+        return cooperativeClose(inMsg);
     } else if (op == OP_START_UNCOOPERATIVE_CLOSE) {
         startUncooperativeClose(inMsg);
     } else if (op == OP_CHALLENGE_QUARANTINEED_STATE) {
@@ -767,7 +735,8 @@ fun onInternalMessage(_: int, _: int, inMsgFull: cell, inMsg: slice) {
     } else if (op == OP_SETTLE_CONDITIONALS) {
         settleConditionals(inMsg);
     } else if (op == OP_FINISH_UNCOOPERATIVE_CLOSE) {
-        finishUncooperativeClose();
+        // excess hadled in channelClose()
+        return finishUncooperativeClose();
     } else {
         throw 0xffff;
     }
@@ -821,8 +790,8 @@ fun sendJettonsBack(dest: slice, amount: int, jettonWallet: slice) {
             .storeSlice(jettonWallet)
             .storeCoins(0)
             .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
-                .storeUint(OP_JETTON_TRANSFER, 32)
-                .storeUint(0, 64)
+                .storeMessageOp(OP_JETTON_TRANSFER)
+                .storeMessageQueryId(0)
                 .storeCoins(amount)
                 .storeSlice(dest)
                 .storeSlice(dest)
@@ -830,28 +799,31 @@ fun sendJettonsBack(dest: slice, amount: int, jettonWallet: slice) {
                 .storeCoins(1)
                 .storeBool(false)
             .endCell(),
-        64 | 2
+        SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE | SEND_MODE_IGNORE_ERRORS
     );
 }
 
 @inline_ref
 fun sendExcess(dest: slice) {
+    var ecDict: cell = createEmptyDict();
     var reserve: int = ctxPaymentConfigStorageFee;
     if (ctxCurrencyType == CURRENCY_TYPE_TON) {
         reserve += ctxBalanceA + ctxBalanceB;
+    } else if ((ctxCurrencyType == CURRENCY_TYPE_EC) & ((ctxBalanceA + ctxBalanceB) > 0)) {
+        ecDict.uDictSetBuilder(32, ctxECID, beginCell().storeVarUInt32(ctxBalanceA + ctxBalanceB));
     }
-    reserveToncoinsOnBalance(reserve, 0);
+    reserveExtraCurrenciesOnBalance(reserve, ecDict, 0);
 
-    sendMessage(
+   sendMessage(
         beginCell()
             .storeUint(NON_BOUNCEABLE, 6)
             .storeSlice(dest)
             .storeCoins(0)
             .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
-            .storeUint(OP_EXCESSES, 32)
-            .storeUint(0, 64)
-            .endCell(),
-        128 | 2
+            .storeMessageOp(OP_EXCESSES)
+            .storeMessageQueryId(0)
+        .endCell(),
+       SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS
     );
 }
 
@@ -873,9 +845,11 @@ fun assignJettonWallet(sender: slice, payload: slice) {
         .storeCoins(ctxPaymentConfigStorageFee)
         .storeSlice(ctxPaymentConfigAddressA)
         .storeSlice(ctxPaymentConfigAddressB)
-        .storeUint(3,2) // maybe either jetton
-        .storeSlice(ctxJettonRoot)
-        .storeSlice(ctxJettonWallet)
+        .storeUint(3, 2) // jetton type
+        .storeRef(beginCell()
+            .storeSlice(ctxJettonRoot)
+            .storeSlice(ctxJettonWallet)
+        .endCell())
     .endCell();
 
     saveStorage();
