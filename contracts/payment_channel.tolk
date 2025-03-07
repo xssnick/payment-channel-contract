@@ -262,7 +262,7 @@ fun sendPayoutTon(sAddr: slice, amount: int, channelId: int, op: int, flags: int
             .storeSlice(sAddr)
             .storeCoins(amount)
             .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
-            .storeUint(op, 32)
+            .storeMessageOp(op)
             .storeUint(channelId, 128)
         .endCell(),
         flags
@@ -281,7 +281,7 @@ fun sendPayoutEC(sAddr: slice, amount: int, channelId: int, op: int, flags: int)
             .storeCoins(FEE_EC_PAYOUT)
             .storeDict(currenciesToSend)
             .storeUint(0, 4 + 4 + 64 + 32 + 1 + 1)
-            .storeUint(op, 32)
+            .storeMessageOp(op)
             .storeUint(channelId, 128)
         .endCell(),
         flags
@@ -304,15 +304,15 @@ fun sendPayoutJetton(sAddr: slice, amount: int, channelId: int, op: int, flags: 
             .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1)
             .storeBool(true)
             .storeRef(beginCell()
-                .storeUint(OP_JETTON_TRANSFER, 32)
-                .storeUint(0, 64)
+                .storeMessageOp(OP_JETTON_TRANSFER)
+                .storeMessageQueryId(0)
                 .storeCoins(amount)
                 .storeSlice(sAddr)
                 .storeSlice(sAddr)
                 .storeMaybeRef(null)
                 .storeCoins(FEE_JETTON_FORWARD)
                 .storeBool(true)
-                .storeUint(op, 32)
+                .storeMessageOp(op)
                 .storeUint(channelId, 128)
             .endCell())
         .endCell(),
@@ -867,8 +867,8 @@ fun requestJettonWallet() {
         .storeSlice(ctxJettonRoot)
         .storeCoins(FEE_JETTON_WALLET_PROVIDE)
         .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
-        .storeUint(OP_JETTON_PROVIDE_WALLET_ADDRESS, 32)
-        .storeUint(0, 64)
+        .storeMessageOp(OP_JETTON_PROVIDE_WALLET_ADDRESS)
+        .storeMessageQueryId(0)
         .storeSlice(getMyAddress())
         .storeBool(false)
     .endCell(), 0);
