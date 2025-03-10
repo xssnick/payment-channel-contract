@@ -83,6 +83,7 @@ const ERROR_NOT_ENOUGH_CONTRACT_BALANCE = 122;
 const ERROR_NOT_ENOUGH_MONEY_FOR_INIT_STORAGE = 123;
 const ERROR_JETTON_WALLET_ALREADY_INSTALLED = 124;
 const ERROR_QUARANTINEE_ALREADY_CHALLENGED = 125;
+const ERROR_INCORRECT_SUMMARIZED_BALANCE = 126;
 
 const STORAGE_FULL = 4;
 const STORAGE_UP_TO_QUARANTINE = 3;
@@ -200,6 +201,8 @@ fun saveStorage() {
 
 fun topUpBalance(amount: int, msg: slice) {
     assert(ctxInited) throw ERROR_NOT_INITED;
+    // we allow topup only when there is no disput
+    assert(ctxQuarantine == null) throw ERROR_QUARANTINE_ALREADY_ACTIVE;
 
     var isA: bool = msg.loadBool();
     if (isA) {
@@ -360,8 +363,15 @@ fun cooperativeClose(msg: slice) {
     assert(isSignatureValid(hash, sigA, ctxKeyA) &
         isSignatureValid(hash, sigB, ctxKeyB)) throw ERROR_NOT_AUTHORIZED;
 
-    ctxBalanceA = msg.loadCoins();
-    ctxBalanceB = msg.loadCoins();
+    var newBalanceA: int = msg.loadCoins();
+    var newBalanceB: int = msg.loadCoins();
+
+    // balance can be moved only from A to B
+    // in case of topup after commit generation, commit will fail, to not loose balance
+    assert((newBalanceA + newBalanceB) == (ctxBalanceA + ctxBalanceB)) throw ERROR_INCORRECT_SUMMARIZED_BALANCE;
+
+    ctxBalanceA = newBalanceA;
+    ctxBalanceB = newBalanceB;
 
     var newSeqnoA: int = msg.loadUint(64);
     var newSeqnoB: int = msg.loadUint(64);
@@ -385,8 +395,15 @@ fun cooperativeCommit(msg: slice) {
     assert(isSignatureValid(hash, sigA, ctxKeyA) &
         isSignatureValid(hash, sigB, ctxKeyB)) throw ERROR_NOT_AUTHORIZED;
 
-    ctxBalanceA = msg.loadCoins();
-    ctxBalanceB = msg.loadCoins();
+    var newBalanceA: int = msg.loadCoins();
+    var newBalanceB: int = msg.loadCoins();
+
+    // balance can be moved only from A to B
+    // in case of topup after commit generation, commit will fail, to not loose balance
+    assert((newBalanceA + newBalanceB) == (ctxBalanceA + ctxBalanceB)) throw ERROR_INCORRECT_SUMMARIZED_BALANCE;
+
+    ctxBalanceA = newBalanceA;
+    ctxBalanceB = newBalanceB;
 
     var newSeqnoA: int = msg.loadUint(64);
     var newSeqnoB: int = msg.loadUint(64);
