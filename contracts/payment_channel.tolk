@@ -34,6 +34,10 @@ asm(-> 1 0) "LDVARUINT32";
 global ctxInited: bool;
 global ctxBalanceA: int;
 global ctxBalanceB: int;
+global ctxDepositA: int;
+global ctxDepositB: int;
+global ctxWithdrawA: int;
+global ctxWithdrawB: int;
 global ctxKeyA: int;
 global ctxKeyB: int;
 global ctxChannelId: int;
@@ -166,11 +170,34 @@ fun loadPaymentConfig(mutate self: slice): void {
     }
 }
 
+@inline
+fun loadBalances(mutate self: slice): void {
+    var cs = self.loadRef().beginParse();
+    ctxDepositA = cs.loadCoins();
+    ctxDepositB = cs.loadCoins();
+    ctxWithdrawA = cs.loadCoins();
+    ctxWithdrawB = cs.loadCoins();
+    ctxBalanceA = cs.loadCoins();
+    ctxBalanceB = cs.loadCoins();
+}
+
+@inline
+fun balancesCell(): cell {
+    return beginCell()
+        .storeCoins(ctxDepositA)
+        .storeCoins(ctxDepositB)
+        .storeCoins(ctxWithdrawA)
+        .storeCoins(ctxWithdrawB)
+        .storeCoins(ctxBalanceA)
+        .storeCoins(ctxBalanceB)
+    .endCell();
+}
+
 fun loadStorage() {
     var cs: slice = getContractData().beginParse();
     ctxInited = cs.loadBool();
-    ctxBalanceA = cs.loadCoins();
-    ctxBalanceB = cs.loadCoins();
+    cs.loadBalances();
+
     ctxKeyA = cs.loadUint(256);
     ctxKeyB = cs.loadUint(256);
     ctxChannelId = cs.loadUint(128);
@@ -186,8 +213,7 @@ fun loadStorage() {
 fun saveStorage() {
     setContractData(beginCell()
         .storeBool(ctxInited)
-        .storeCoins(ctxBalanceA)
-        .storeCoins(ctxBalanceB)
+        .storeRef(balancesCell())
         .storeUint(ctxKeyA, 256)
         .storeUint(ctxKeyB, 256)
         .storeUint(ctxChannelId, 128)
@@ -206,8 +232,10 @@ fun topUpBalance(amount: int, msg: slice) {
 
     var isA: bool = msg.loadBool();
     if (isA) {
+        ctxDepositA += amount;
         ctxBalanceA += amount;
     } else {
+        ctxDepositB += amount;
         ctxBalanceB += amount;
     }
 
@@ -223,10 +251,8 @@ fun initChannel(msg: slice) {
     assert(msg.loadUint(32) == TAG_INIT_CHANNEL) throw ERROR_WRONG_TAG;
     assert(ctxChannelId == msg.loadUint(128)) throw ERROR_WRONG_CHANNEL_ID;
 
-    // must be 0, we handle adjustments in topup
-    assert((ctxBalanceA | ctxBalanceB) == 0) throw ERROR_INCORRECT_INITIAL_BALANCE;
-
-    ctxInited = true;
+    // must be 0, we handle adjustments in topup and withdraw
+    assert((ctxBalanceA | ctxBalanceB | ctxDepositA | ctxDepositB | ctxWithdrawA | ctxWithdrawB) == 0) throw ERROR_INCORRECT_INITIAL_BALANCE;
 
     var storageMin: int = FEE_MIN_BALANCE;
     if (ctxCurrencyType == CURRENCY_TYPE_JETTON) {
@@ -243,6 +269,7 @@ fun initChannel(msg: slice) {
     assert((ctxPaymentConfigStorageFee > storageMin) &
         (getMyOriginalBalance() >= ctxPaymentConfigStorageFee)) throw ERROR_NOT_ENOUGH_MONEY_FOR_INIT_STORAGE;
 
+    ctxInited = true;
     return saveStorage();
 }
 
@@ -327,12 +354,14 @@ fun sendPayoutJetton(sAddr: slice, amount: int, channelId: int, op: int, flags: 
 fun withdraw(a: int, b: int) {
     if (b > 0) {
         ctxBalanceB -= b;
+        ctxWithdrawB += b;
         assert(ctxBalanceB >= 0) throw ERROR_NOT_ENOUGH_BALANCE;
         sendPayout(ctxPaymentConfigAddressB, b, ctxChannelId, OP_CHANNEL_WITHDRAW, 0);
     }
 
     if (a > 0) {
         ctxBalanceA -= a;
+        ctxWithdrawA += a;
         assert(ctxBalanceA >= 0) throw ERROR_NOT_ENOUGH_BALANCE;
         sendPayout(ctxPaymentConfigAddressA, a, ctxChannelId, OP_CHANNEL_WITHDRAW, 0);
     }
@@ -348,6 +377,10 @@ fun closeChannel() {
     ctxInited = false;
     ctxBalanceA = 0;
     ctxBalanceB = 0;
+    ctxDepositA = 0;
+    ctxDepositB = 0;
+    ctxWithdrawA = 0;
+    ctxWithdrawB = 0;
     ctxQuarantine = null;
     saveStorage();
 }
@@ -927,7 +960,7 @@ get getChannelData() {
     loadStorage();
 
     return (getChannelState(),
-        [ctxBalanceA, ctxBalanceB],
+        [ctxBalanceA, ctxBalanceB, ctxDepositA, ctxDepositB, ctxWithdrawA, ctxWithdrawB],
         [ctxKeyA, ctxKeyB],
         ctxChannelId,
         ctxClosureConfigRef,

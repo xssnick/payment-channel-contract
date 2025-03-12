@@ -18,8 +18,14 @@ payment_conf#_ storage_fee:Coins
               dest_A:MsgAddress
               dest_B:MsgAddress
               currency:PaymentType = PaymentConfig;
+balance#_ deposit_A:Coins
+          deposit_B:Coins
+          withdraw_A:Coins
+          withdraw_B:Coins
+          balance_A:Coins
+          balance_B:Coins = Balance;
 channel_state#_ inited:Bool
-              balance_A:Coins balance_B:Coins
+              balance:^Balance
               key_A:uint256 key_B:uint256
               channel_id:uint128
               config:^ClosingConfig
