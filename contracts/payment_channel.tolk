@@ -839,7 +839,9 @@ fun sendJettonsBack(dest: slice, amount: int, jettonWallet: slice) {
             .storeUint(NON_BOUNCEABLE, 6)
             .storeSlice(jettonWallet)
             .storeCoins(0)
-            .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+            .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1)
+            .storeBool(true)
+            .storeRef(beginCell()
                 .storeMessageOp(OP_JETTON_TRANSFER)
                 .storeMessageQueryId(0)
                 .storeCoins(amount)
@@ -848,7 +850,8 @@ fun sendJettonsBack(dest: slice, amount: int, jettonWallet: slice) {
                 .storeMaybeRef(null)
                 .storeCoins(1)
                 .storeBool(false)
-            .endCell(),
+            .endCell())
+        .endCell(),
         SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE | SEND_MODE_IGNORE_ERRORS
     );
 }
