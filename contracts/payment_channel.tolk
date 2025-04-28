@@ -858,14 +858,11 @@ fun sendJettonsBack(dest: slice, amount: int, jettonWallet: slice) {
 
 @inline_ref
 fun sendExcess(dest: slice) {
-    var ecDict: cell = createEmptyDict();
     var reserve: int = ctxPaymentConfigStorageFee;
     if (ctxCurrencyType == CURRENCY_TYPE_TON) {
         reserve += ctxBalanceA + ctxBalanceB;
-    } else if ((ctxCurrencyType == CURRENCY_TYPE_EC) & ((ctxBalanceA + ctxBalanceB) > 0)) {
-        ecDict.uDictSetBuilder(32, ctxECID, beginCell().storeVarUInt32(ctxBalanceA + ctxBalanceB));
     }
-    reserveExtraCurrenciesOnBalance(reserve, ecDict, 0);
+    reserveToncoinsOnBalance(reserve, 0);
 
    sendMessage(
         beginCell()
