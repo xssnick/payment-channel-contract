@@ -22,8 +22,8 @@ balance#_ deposit_A:Coins
           deposit_B:Coins
           withdraw_A:Coins
           withdraw_B:Coins
-          balance_A:Coins
-          balance_B:Coins = Balance;
+          sent_A:Coins
+          sent_B:Coins = Balance;
 channel_state#_ inited:Bool
               balance:^Balance
               key_A:uint256 key_B:uint256
@@ -34,8 +34,8 @@ channel_state#_ inited:Bool
               payments:^PaymentConfig = Storage;
 
 init_channel_inner#481ebc44 channel_id:uint128 = InitChannelInner;
-cooperative_close_inner#0802ada3 channel_id:uint128 balance_A:Coins balance_B:Coins seqno_A:uint64 seqno_B:uint64 = CooperativeCloseInner;
-cooperative_commit_inner#48baa61a channel_id:uint128 balance_A:Coins balance_B:Coins seqno_A:uint64 seqno_B:uint64 withdraw_A:Coins withdraw_B:Coins = CooperativeCommitInner;
+cooperative_close_inner#8243e9a3 channel_id:uint128 sent_A:Coins sent_B:Coins seqno_A:uint64 seqno_B:uint64 = CooperativeCloseInner;
+cooperative_commit_inner#4a390cac channel_id:uint128 sent_A:Coins sent_B:Coins seqno_A:uint64 seqno_B:uint64 withdraw_A:Coins withdraw_B:Coins = CooperativeCommitInner;
 start_uncooperative_close_inner#8c623692 channel_id:uint128 sch_A:^SignedSemiChannel sch_B:^SignedSemiChannel = StartUncooperativeCloseInner;
 challenge_quarantined_state_inner#b8a21379 channel_id:uint128 sch_A:^SignedSemiChannel sch_B:^SignedSemiChannel = ChallengeQuarantinedStateInner;
 settle_conditionals_inner#14588aab channel_id:uint128 conditionals_to_settle:(HashmapE 32 Cell) conditionals_proof:^Cell = SettleConditionalsInner;

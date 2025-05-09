@@ -32,8 +32,8 @@ fun loadVarUInt32(mutate self: slice): int
 asm(-> 1 0) "LDVARUINT32";
 
 global ctxInited: bool;
-global ctxBalanceA: int;
-global ctxBalanceB: int;
+global ctxSentA: int;
+global ctxSentB: int;
 global ctxDepositA: int;
 global ctxDepositB: int;
 global ctxWithdrawA: int;
@@ -111,8 +111,8 @@ const OP_JETTON_TRANSFER_NOTIFICATION = 0x7362d09c;
 const OP_EXCESSES = 0xd53276db;
 
 const TAG_INIT_CHANNEL = 0x481ebc44;
-const TAG_COOPERATIVE_CLOSE = 0x0802ada3;
-const TAG_COOPERATIVE_COMMIT = 0x48baa61a;
+const TAG_COOPERATIVE_CLOSE = 0x8243e9a3;
+const TAG_COOPERATIVE_COMMIT = 0x4a390cac;
 const TAG_START_UNCOOPERATIVE_CLOSE = 0x8c623692;
 const TAG_CHALLENGE_QUARANTINEED_STATE = 0xb8a21379;
 const TAG_SETTLE_CONDITIONALS = 0x14588aab;
@@ -177,8 +177,8 @@ fun loadBalances(mutate self: slice): void {
     ctxDepositB = cs.loadCoins();
     ctxWithdrawA = cs.loadCoins();
     ctxWithdrawB = cs.loadCoins();
-    ctxBalanceA = cs.loadCoins();
-    ctxBalanceB = cs.loadCoins();
+    ctxSentA = cs.loadCoins();
+    ctxSentB = cs.loadCoins();
 }
 
 @inline
@@ -188,8 +188,8 @@ fun balancesCell(): cell {
         .storeCoins(ctxDepositB)
         .storeCoins(ctxWithdrawA)
         .storeCoins(ctxWithdrawB)
-        .storeCoins(ctxBalanceA)
-        .storeCoins(ctxBalanceB)
+        .storeCoins(ctxSentA)
+        .storeCoins(ctxSentB)
     .endCell();
 }
 
@@ -233,10 +233,8 @@ fun topUpBalance(amount: int, msg: slice) {
     var isA: bool = msg.loadBool();
     if (isA) {
         ctxDepositA += amount;
-        ctxBalanceA += amount;
     } else {
         ctxDepositB += amount;
-        ctxBalanceB += amount;
     }
 
     return saveStorage();
@@ -252,7 +250,7 @@ fun initChannel(msg: slice) {
     assert(ctxChannelId == msg.loadUint(128)) throw ERROR_WRONG_CHANNEL_ID;
 
     // must be 0, we handle adjustments in topup and withdraw
-    assert((ctxBalanceA | ctxBalanceB | ctxDepositA | ctxDepositB | ctxWithdrawA | ctxWithdrawB) == 0) throw ERROR_INCORRECT_INITIAL_BALANCE;
+    assert((ctxSentA | ctxSentB | ctxDepositA | ctxDepositB | ctxWithdrawA | ctxWithdrawB) == 0) throw ERROR_INCORRECT_INITIAL_BALANCE;
 
     var storageMin: int = FEE_MIN_BALANCE;
     if (ctxCurrencyType == CURRENCY_TYPE_JETTON) {
@@ -352,31 +350,31 @@ fun sendPayoutJetton(sAddr: slice, amount: int, channelId: int, op: int, flags: 
 
 @inline
 fun withdraw(a: int, b: int) {
-    if (b > 0) {
-        ctxBalanceB -= b;
-        ctxWithdrawB += b;
-        assert(ctxBalanceB >= 0) throw ERROR_NOT_ENOUGH_BALANCE;
-        sendPayout(ctxPaymentConfigAddressB, b, ctxChannelId, OP_CHANNEL_WITHDRAW, 0);
+    if (ctxWithdrawB < b) {
+        var amt = b - ctxWithdrawB;
+        ctxWithdrawB = b;
+        assert(calcBalanceB() >= 0) throw ERROR_NOT_ENOUGH_BALANCE;
+        sendPayout(ctxPaymentConfigAddressB, amt, ctxChannelId, OP_CHANNEL_WITHDRAW, 0);
     }
 
-    if (a > 0) {
-        ctxBalanceA -= a;
-        ctxWithdrawA += a;
-        assert(ctxBalanceA >= 0) throw ERROR_NOT_ENOUGH_BALANCE;
-        sendPayout(ctxPaymentConfigAddressA, a, ctxChannelId, OP_CHANNEL_WITHDRAW, 0);
+    if (ctxWithdrawA < a) {
+        var amt = a - ctxWithdrawA;
+        ctxWithdrawA = a;
+        assert(calcBalanceA() >= 0) throw ERROR_NOT_ENOUGH_BALANCE;
+        sendPayout(ctxPaymentConfigAddressA, amt, ctxChannelId, OP_CHANNEL_WITHDRAW, 0);
     }
 }
 
 fun closeChannel() {
-    sendPayout(ctxPaymentConfigAddressB, ctxBalanceB, ctxChannelId, OP_CHANNEL_CLOSED, SEND_MODE_IGNORE_ERRORS);
+    sendPayout(ctxPaymentConfigAddressB, calcBalanceB(), ctxChannelId, OP_CHANNEL_CLOSED, SEND_MODE_IGNORE_ERRORS);
     // side A is considered to be deployer, so he will get rest contract's ton balance
-    sendPayout(ctxPaymentConfigAddressA, ctxBalanceA, ctxChannelId, OP_CHANNEL_CLOSED, SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS);
+    sendPayout(ctxPaymentConfigAddressA, calcBalanceA(), ctxChannelId, OP_CHANNEL_CLOSED, SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS);
 
     // while channel contract will be emptied it will survive for some time
     // by clearing storage we allow immediately reopen channel with the same configs
     ctxInited = false;
-    ctxBalanceA = 0;
-    ctxBalanceB = 0;
+    ctxSentA = 0;
+    ctxSentB = 0;
     ctxDepositA = 0;
     ctxDepositB = 0;
     ctxWithdrawA = 0;
@@ -396,15 +394,17 @@ fun cooperativeClose(msg: slice) {
     assert(isSignatureValid(hash, sigA, ctxKeyA) &
         isSignatureValid(hash, sigB, ctxKeyB)) throw ERROR_NOT_AUTHORIZED;
 
-    var newBalanceA: int = msg.loadCoins();
-    var newBalanceB: int = msg.loadCoins();
+    var newSentA: int = msg.loadCoins();
+    var newSentB: int = msg.loadCoins();
 
     // balance can be moved only from A to B
     // in case of topup after commit generation, commit will fail, to not loose balance
-    assert((newBalanceA + newBalanceB) == (ctxBalanceA + ctxBalanceB)) throw ERROR_INCORRECT_SUMMARIZED_BALANCE;
+    var oldBalanceSum = calcBalanceA() + calcBalanceB();
+    ctxSentA = newSentA;
+    ctxSentB = newSentB;
+    var newBalanceSum = calcBalanceA() + calcBalanceB();
 
-    ctxBalanceA = newBalanceA;
-    ctxBalanceB = newBalanceB;
+    assert(oldBalanceSum == newBalanceSum) throw ERROR_INCORRECT_SUMMARIZED_BALANCE;
 
     var newSeqnoA: int = msg.loadUint(64);
     var newSeqnoB: int = msg.loadUint(64);
@@ -428,15 +428,18 @@ fun cooperativeCommit(msg: slice) {
     assert(isSignatureValid(hash, sigA, ctxKeyA) &
         isSignatureValid(hash, sigB, ctxKeyB)) throw ERROR_NOT_AUTHORIZED;
 
-    var newBalanceA: int = msg.loadCoins();
-    var newBalanceB: int = msg.loadCoins();
+    var newSentA: int = msg.loadCoins();
+    var newSentB: int = msg.loadCoins();
 
     // balance can be moved only from A to B
     // in case of topup after commit generation, commit will fail, to not loose balance
-    assert((newBalanceA + newBalanceB) == (ctxBalanceA + ctxBalanceB)) throw ERROR_INCORRECT_SUMMARIZED_BALANCE;
+    var oldBalanceSum = calcBalanceA() + calcBalanceB();
+    ctxSentA = newSentA;
+    ctxSentB = newSentB;
+    var newBalanceSum = calcBalanceA() + calcBalanceB();
 
-    ctxBalanceA = newBalanceA;
-    ctxBalanceB = newBalanceB;
+    assert(oldBalanceSum == newBalanceSum) throw ERROR_INCORRECT_SUMMARIZED_BALANCE;
+
 
     var newSeqnoA: int = msg.loadUint(64);
     var newSeqnoB: int = msg.loadUint(64);
@@ -460,10 +463,7 @@ fun cooperativeCommit(msg: slice) {
     var withdrawA: int = msg.loadCoins();
     var withdrawB: int = msg.loadCoins();
 
-    if ((withdrawA | withdrawB) > 0) {
-        withdraw(withdrawA, withdrawB);
-    }
-
+    withdraw(withdrawA, withdrawB);
     saveStorage();
 }
 
@@ -720,15 +720,17 @@ fun finishUncooperativeClose() {
         ctxClosureConfigQuarantineDuration +
         ctxClosureConfigCloseDuration < now()) throw ERROR_TOO_EARLY_TO_CLOSE;
 
-    ctxBalanceA = ctxBalanceA + sentB - sentA;
-    ctxBalanceB = ctxBalanceB + sentA - sentB;
-    if (ctxBalanceB < 0) {
-        ctxBalanceA += ctxBalanceB;
-        ctxBalanceB = 0;
+    ctxSentB += sentB;
+    ctxSentA += sentA;
+
+    var balanceB = calcBalanceB();
+    var balanceA = calcBalanceA();
+
+    if (balanceB < 0) {
+        ctxSentA -= balanceB;
     }
-    if (ctxBalanceA < 0) {
-        ctxBalanceB += ctxBalanceA;
-        ctxBalanceB = 0;
+    if (balanceA < 0) {
+        ctxSentB -= balanceA;
     }
 
     ctxCommitedSeqnoA = seqnoA + 1;
@@ -860,7 +862,7 @@ fun sendJettonsBack(dest: slice, amount: int, jettonWallet: slice) {
 fun sendExcess(dest: slice) {
     var reserve: int = ctxPaymentConfigStorageFee;
     if (ctxCurrencyType == CURRENCY_TYPE_TON) {
-        reserve += ctxBalanceA + ctxBalanceB;
+        reserve += calcBalanceA() + calcBalanceB();
     }
     reserveToncoinsOnBalance(reserve, 0);
 
@@ -903,6 +905,16 @@ fun assignJettonWallet(sender: slice, payload: slice) {
     .endCell();
 
     saveStorage();
+}
+
+@inline
+fun calcBalanceA(): int {
+    return (ctxDepositA + ctxSentB) - (ctxSentA + ctxWithdrawA);
+}
+
+@inline
+fun calcBalanceB(): int {
+    return (ctxDepositB + ctxSentA) - (ctxSentB + ctxWithdrawB);
 }
 
 @inline_ref
@@ -960,7 +972,7 @@ get getChannelData() {
     loadStorage();
 
     return (getChannelState(),
-        [ctxBalanceA, ctxBalanceB, ctxDepositA, ctxDepositB, ctxWithdrawA, ctxWithdrawB],
+        [calcBalanceA(), calcBalanceB(), ctxDepositA, ctxDepositB, ctxWithdrawA, ctxWithdrawB],
         [ctxKeyA, ctxKeyB],
         ctxChannelId,
         ctxClosureConfigRef,
