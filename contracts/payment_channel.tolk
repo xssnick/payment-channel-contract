@@ -2,280 +2,7 @@ import "@stdlib/common.tolk"
 import "@stdlib/gas-payments"
 import "@stdlib/tvm-dicts"
 import "@stdlib/tvm-lowlevel"
-
-@pure
-fun cell.isUdictReplaceGet(self, keyLen: int, index: int, value: slice): (cell, slice, int)
-asm(value index self keyLen) "DICTUREPLACEGET" "NULLSWAPIFNOT";
-
-@pure
-fun cell.beginParseSpecial(self): (slice, int)
-asm "x{D739} s,";
-
-@pure
-fun castToS2I(c: continuation): (slice -> int)
-asm "NOP";
-
-@pure
-fun emptySlice(): slice
-asm "b{} PUSHSLICE";
-
-@pure
-fun proofHash(c: cell): int
-asm "0 CHASHI";
-
-@pure
-fun builder.storeVarUInt32(mutate self, x: int): self
-asm "STVARUINT32";
-
-@pure
-fun slice.loadVarUInt32(mutate self): int
-asm(-> 1 0) "LDVARUINT32";
-
-struct ClosureConfig {
-    quarantineDuration: int;
-    fine: int;
-    closeDuration: int;
-
-    ref: cell;
-}
-
-struct PaymentConfig {
-    storageFee: int;
-    addressA: slice;
-    addressB: slice;
-    currencyType: int;
-    ecId: int;
-    jettonRoot: slice;
-    jettonWallet: slice;
-
-    ref: cell;
-}
-
-struct Balance {
-    depositA: int;
-    depositB: int;
-    withdrawA: int;
-    withdrawB: int;
-    sentA: int;
-    sentB: int;
-}
-
-struct Channel {
-    inited: bool;
-    balance: Balance;
-    keyA: int;
-    keyB: int;
-    id: int;
-    closureConfig: ClosureConfig;
-    commitedSeqnoA: int;
-    commitedSeqnoB: int;
-
-    quarantine: cell?;
-    paymentConfig: PaymentConfig;
-}
-
-const ERROR_ALREADY_INITED = 100;
-const ERROR_NOT_AUTHORIZED = 101;
-const ERROR_INCORRECT_INITIAL_BALANCE = 102;
-const ERROR_WRONG_TAG = 104;
-const ERROR_OUTDATED_STATE = 105;
-const ERROR_QUARANTINE_ALREADY_ACTIVE = 106;
-const ERROR_NO_QUARANTINED_STATE = 107;
-const ERROR_SEQNO_REGRESS = 108;
-const ERROR_UNAUTHORIZED_CHALLENGE = 109;
-const ERROR_QUARANTINE_NOT_FINISHED = 110;
-const ERROR_TOO_LATE_FOR_QUARANTINE_CHALLENGE = 111;
-const ERROR_TOO_LATE_TO_SETTLE_CONDITIONALS = 112;
-const ERROR_TOO_EARLY_TO_CLOSE = 113;
-const ERROR_WRONG_CHANNEL_ID = 114;
-const ERROR_INCORRECT_CONDITIONALS_PROOF = 115;
-const ERROR_INCORRECT_UPDATED_PROOF = 116;
-const ERROR_NOT_INITED = 117;
-const ERROR_NOT_ENOUGH_BALANCE = 118;
-const ERROR_AMOUNT_NOT_COVERS_FEE = 119;
-const ERROR_INVALID_CURRENCY_TYPE = 120;
-const ERROR_INVALID_EC_ID = 121;
-const ERROR_NOT_ENOUGH_CONTRACT_BALANCE = 122;
-const ERROR_NOT_ENOUGH_MONEY_FOR_INIT_STORAGE = 123;
-const ERROR_JETTON_WALLET_ALREADY_INSTALLED = 124;
-const ERROR_QUARANTINEE_ALREADY_CHALLENGED = 125;
-const ERROR_INCORRECT_SUMMARIZED_BALANCE = 126;
-
-const STORAGE_FULL = 4;
-const STORAGE_UP_TO_QUARANTINE = 3;
-const STORAGE_UP_TO_CLOSURE_CONFIG = 1;
-const STORAGE_BALANCES_AND_KEYS = 0;
-
-const OP_TOP_UP_BALANCE = 0x593e3893;
-const OP_INIT_CHANNEL = 0x79ae99b5;
-const OP_COOPERATIVE_CLOSE = 0xd2b1eeeb;
-const OP_COOPERATIVE_COMMIT = 0x076bfdf1;
-const OP_START_UNCOOPERATIVE_CLOSE = 0x8175e15d;
-const OP_CHALLENGE_QUARANTINEED_STATE = 0x9a77c0db;
-const OP_SETTLE_CONDITIONALS = 0x56c39b4c;
-const OP_FINISH_UNCOOPERATIVE_CLOSE = 0x25432a91;
-const OP_CHANNEL_CLOSED = 0xdddc88ba;
-const OP_CHANNEL_WITHDRAW = 0xa32f0b3c;
-const OP_JETTON_TRANSFER = 0xf8a7ea5;
-const OP_JETTON_TAKE_WALLET_ADDRESS = 0xd1735400;
-const OP_JETTON_PROVIDE_WALLET_ADDRESS = 0x2c76b973;
-const OP_JETTON_TRANSFER_NOTIFICATION = 0x7362d09c;
-const OP_EXCESSES = 0xd53276db;
-
-const TAG_INIT_CHANNEL = 0x481ebc44;
-const TAG_COOPERATIVE_CLOSE = 0x8243e9a3;
-const TAG_COOPERATIVE_COMMIT = 0x4a390cac;
-const TAG_START_UNCOOPERATIVE_CLOSE = 0x8c623692;
-const TAG_CHALLENGE_QUARANTINEED_STATE = 0xb8a21379;
-const TAG_SETTLE_CONDITIONALS = 0x14588aab;
-const TAG_STATE = 0x43685374;
-
-const STATE_UNINITED = 0;
-const STATE_OPEN = 1;
-const STATE_CLOSURE_STARTED = 2;
-const STATE_SETTLING_CONDITIONALS = 3;
-const STATE_AWAITING_FINALIZATION = 4;
-
-const FEE_JETTON_ACCEPT  = 35000000; // 0.035
-const FEE_JETTON_PAYOUT  = 80000000; // 0.08
-const FEE_JETTON_FORWARD = 35000000; // 0.03
-const FEE_EC_ACCEPT      = 25000000; // 0.025
-const FEE_EC_PAYOUT      = 30000000; // 0.03
-const FEE_TON_ACCEPT     = 30000000; // 0.03
-const FEE_MIN_BALANCE    = 10000000; // 0.01
-const FEE_JETTON_WALLET_PROVIDE = 30000000; // 0.03
-
-const CURRENCY_TYPE_TON = 0;
-const CURRENCY_TYPE_EC = 1;
-const CURRENCY_TYPE_JETTON = 2;
-
-@inline
-fun ClosureConfig.parse(c: cell): ClosureConfig {
-    var cs: slice = c.beginParse();
-
-    return ClosureConfig{
-        quarantineDuration: cs.loadUint(32),
-        fine: cs.loadCoins(),
-        closeDuration: cs.loadUint(32),
-        ref: c,
-    }
-}
-
-@inline
-fun ClosureConfig.serialize(self): cell {
-    return self.ref;
-}
-
-@inline
-fun PaymentConfig.parse(c: cell): PaymentConfig {
-    var cs: slice = c.beginParse();
-
-    var conf: PaymentConfig = {
-        storageFee: cs.loadCoins(),
-        addressA: cs.loadAddress(),
-        addressB: cs.loadAddress(),
-        currencyType: CURRENCY_TYPE_TON,
-        ecId: 0,
-        jettonWallet: createAddressNone(),
-        jettonRoot: createAddressNone(),
-        ref: c,
-    };
-
-    var isCustomCurrency: bool = cs.loadBool();
-    if (isCustomCurrency) {
-        var isJetton: bool = cs.loadBool();
-        if (isJetton) {
-            var j: slice = cs.loadRef().beginParse();
-            conf.currencyType = CURRENCY_TYPE_JETTON;
-            conf.jettonRoot = j.loadAddress();
-            conf.jettonWallet = j.loadAddress();
-        } else {
-            conf.currencyType = CURRENCY_TYPE_EC;
-            conf.ecId = cs.loadUint(32);
-        }
-    }
-
-    return conf;
-}
-
-@inline
-fun PaymentConfig.serialize(self): cell {
-    return self.ref;
-}
-
-@inline
-fun PaymentConfig.update(mutate self) {
-    self.ref = beginCell()
-        .storeCoins(self.storageFee)
-        .storeSlice(self.addressA)
-        .storeSlice(self.addressB)
-        .storeUint(3, 2) // jetton type
-        .storeRef(beginCell()
-            .storeSlice(self.jettonRoot)
-            .storeSlice(self.jettonWallet)
-            .endCell())
-        .endCell();
-}
-
-@inline
-fun Balance.parse(c: cell): Balance {
-    var cs: slice = c.beginParse();
-
-    return Balance {
-        depositA: cs.loadCoins(),
-        depositB: cs.loadCoins(),
-        withdrawA: cs.loadCoins(),
-        withdrawB: cs.loadCoins(),
-        sentA: cs.loadCoins(),
-        sentB: cs.loadCoins(),
-    }
-}
-
-@inline
-fun Balance.serialize(self): cell {
-    return beginCell()
-        .storeCoins(self.depositA)
-        .storeCoins(self.depositB)
-        .storeCoins(self.withdrawA)
-        .storeCoins(self.withdrawB)
-        .storeCoins(self.sentA)
-        .storeCoins(self.sentB)
-    .endCell();
-}
-
-@inline
-fun Channel.parse(c: cell): Channel {
-    var cs: slice = c.beginParse();
-
-    return Channel {
-        inited: cs.loadBool(),
-        balance: Balance.parse(cs.loadRef()),
-        keyA: cs.loadUint(256),
-        keyB: cs.loadUint(256),
-        id: cs.loadUint(128),
-        closureConfig: ClosureConfig.parse(cs.loadRef()),
-        commitedSeqnoA: cs.loadUint(32),
-        commitedSeqnoB: cs.loadUint(32),
-        quarantine: cs.loadMaybeRef(),
-        paymentConfig: PaymentConfig.parse(cs.loadRef()),
-    }
-}
-
-@inline_ref
-fun Channel.serialize(self): cell {
-    return beginCell()
-        .storeBool(self.inited)
-        .storeRef(self.balance.serialize())
-        .storeUint(self.keyA, 256)
-        .storeUint(self.keyB, 256)
-        .storeUint(self.id, 128)
-        .storeRef(self.closureConfig.serialize())
-        .storeUint(self.commitedSeqnoA, 32)
-        .storeUint(self.commitedSeqnoB, 32)
-        .storeMaybeRef(self.quarantine)
-        .storeRef(self.paymentConfig.serialize())
-    .endCell();
-}
+import "types.tolk"
 
 fun topUpBalance(channel: Channel, amount: int, msg: slice) {
     assert(channel.inited) throw ERROR_NOT_INITED;
@@ -298,8 +25,7 @@ fun initChannel(channel: Channel, msg: slice) {
     var isA: int = msg.loadInt(1);
     var signature: slice = msg.loadBits(512);
     assert(isSignatureValid(msg.hash(), signature, isA ? channel.keyA : channel.keyB)) throw ERROR_NOT_AUTHORIZED;
-    assert(msg.loadUint(32) == TAG_INIT_CHANNEL) throw ERROR_WRONG_TAG;
-    assert(channel.id == msg.loadUint(128)) throw ERROR_WRONG_CHANNEL_ID;
+    channel.verifyMessageType(mutate msg, TAG_INIT_CHANNEL);
 
     // must be 0, we handle adjustments in topup and withdraw
     assert((channel.balance.sentA | channel.balance.sentB | 
@@ -427,10 +153,10 @@ fun closeChannel(channel: Channel) {
 fun cooperativeClose(channel: Channel, msg: slice) {
     var sigA: slice = msg.loadRef().beginParse();
     var sigB: slice = msg.loadRef().beginParse();
-
     var hash: int = msg.hash();
-    assert(msg.loadUint(32) == TAG_COOPERATIVE_CLOSE) throw ERROR_WRONG_TAG;
-    assert(channel.id == msg.loadUint(128)) throw ERROR_WRONG_CHANNEL_ID;
+
+    channel.verifyMessageType(mutate msg, TAG_COOPERATIVE_CLOSE);
+
     assert(isSignatureValid(hash, sigA, channel.keyA) &
         isSignatureValid(hash, sigB, channel.keyB)) throw ERROR_NOT_AUTHORIZED;
 
@@ -461,10 +187,10 @@ fun cooperativeClose(channel: Channel, msg: slice) {
 fun cooperativeCommit(channel: Channel, msg: slice) {
     var sigA: slice = msg.loadRef().beginParse();
     var sigB: slice = msg.loadRef().beginParse();
-
     var hash: int = msg.hash();
-    assert(msg.loadUint(32) == TAG_COOPERATIVE_COMMIT) throw ERROR_WRONG_TAG;
-    assert(channel.id == msg.loadUint(128)) throw ERROR_WRONG_CHANNEL_ID;
+
+    channel.verifyMessageType(mutate msg, TAG_COOPERATIVE_COMMIT);
+
     assert(isSignatureValid(hash, sigA, channel.keyA) &
         isSignatureValid(hash, sigB, channel.keyB)) throw ERROR_NOT_AUTHORIZED;
 
@@ -480,7 +206,6 @@ fun cooperativeCommit(channel: Channel, msg: slice) {
 
     assert(oldBalanceSum == newBalanceSum) throw ERROR_INCORRECT_SUMMARIZED_BALANCE;
 
-
     var newSeqnoA: int = msg.loadUint(64);
     var newSeqnoB: int = msg.loadUint(64);
     assert((channel.commitedSeqnoA < newSeqnoA) &
@@ -490,11 +215,8 @@ fun cooperativeCommit(channel: Channel, msg: slice) {
     channel.commitedSeqnoB = newSeqnoB;
 
     if (channel.quarantine != null) {
-        var storedStates: slice = channel.quarantine!.beginParse();
-        var (storedSeqnoA: int, _: int) = (storedStates.loadUint(64), storedStates.loadCoins());
-        storedStates.skipBits(1);
-        var (storedSeqnoB: int, _: int) = (storedStates.loadUint(64), storedStates.loadCoins());
-        if ((newSeqnoA > storedSeqnoA) | (newSeqnoB > storedSeqnoB)) {
+        var qua = Quarantine.parse(channel.quarantine);
+        if ((newSeqnoA > qua.stateA.seqno) | (newSeqnoB > qua.stateB.seqno)) {
             // quarantinened state is older than newly commited one, drop it
             channel.quarantine = null;
         }
@@ -520,69 +242,29 @@ fun cooperativeCommit(channel: Channel, msg: slice) {
     return contract.setData(channel.serialize());
 }
 
-@inline
-fun slice.parseSemichannelData(mutate self, id: int): (int, int, int) {
-    assert(self.loadUint(32) == TAG_STATE) throw ERROR_WRONG_TAG;
-    assert(id == self.loadUint(128)) throw ERROR_WRONG_CHANNEL_ID;
-    return (self.loadUint(64), self.loadCoins(), self.loadUint(256));
-}
-
-@inline
-fun slice.parseMaybeSemichannelBody(mutate self): (int, int, int) {
-    var maybe: int = self.loadInt(1);
-    if (!maybe) {
-        return (-1, -1, -1);
-    }
-    var body: slice = self.loadRef().beginParse();
-    return (body.loadUint(64), body.loadCoins(), body.loadUint(256));
-}
-
 @inline_ref
 fun startUncooperativeClose(channel: Channel, msg: slice) {
     assert(channel.quarantine == null) throw ERROR_QUARANTINE_ALREADY_ACTIVE;
-    var signedByA: int = msg.loadInt(1);
+    var signedByA: bool = msg.loadBool();
     var signature: slice = msg.loadBits(512);
     assert(isSignatureValid(msg.hash(), signature, signedByA ? channel.keyA : channel.keyB)) throw ERROR_NOT_AUTHORIZED;
-    assert(msg.loadUint(32) == TAG_START_UNCOOPERATIVE_CLOSE) throw ERROR_WRONG_TAG;
-    assert(channel.id == msg.loadUint(128)) throw ERROR_WRONG_CHANNEL_ID;
 
-    var semiChannelA: slice = msg.loadRef().beginParse();
-    var signatureA: slice = semiChannelA.loadBits(512);
-    var semiChannelStateA: cell = semiChannelA.preloadRef();
-    assert(isSignatureValid(semiChannelStateA.hash(), signatureA, channel.keyA)) throw ERROR_NOT_AUTHORIZED;
-    var stateA: slice = semiChannelStateA.beginParse();
+    channel.verifyMessageType(mutate msg, TAG_START_UNCOOPERATIVE_CLOSE);
 
-    var semiChannelB: slice = msg.loadRef().beginParse();
-    var signatureB: slice = semiChannelB.loadBits(512);
-    var semiChannelStateB: cell = semiChannelB.preloadRef();
-    assert(isSignatureValid(semiChannelStateB.hash(), signatureB, channel.keyB)) throw ERROR_NOT_AUTHORIZED;
-    var stateB: slice = semiChannelStateB.beginParse();
+    var a = Semichannel.parse(msg.loadRef(), channel.id, channel.keyA);
+    var b = Semichannel.parse(msg.loadRef(), channel.id, channel.keyB);
 
-    var (seqnoA: int, sentA: int, conditionalsHashA: int) = stateA.parseSemichannelData(channel.id);
-    var (seqnoBRefA: int, sentBRefA: int, _) = stateA.parseMaybeSemichannelBody();
+    channel.verifyStates(a, b);
 
-    var (seqnoB: int, sentB: int, conditionalsHashB: int) = stateB.parseSemichannelData(channel.id);
-    var (seqnoARefB: int, sentARefB: int, _) = stateB.parseMaybeSemichannelBody();
+    var qua = Quarantine{
+        stateA: a.data,
+        stateB: b.data,
+        startedAt: blockchain.now(),
+        committedbyA: signedByA,
+        challenged: false,
+    };
 
-    assert((seqnoA >= channel.commitedSeqnoA) &
-        (seqnoB >= channel.commitedSeqnoB) &
-        (seqnoB >= seqnoBRefA) &
-        (seqnoA >= seqnoARefB) &
-        (sentB >= sentBRefA) &
-        (sentA >= sentARefB)) throw ERROR_OUTDATED_STATE;
-
-    channel.quarantine = beginCell()
-        .storeUint(seqnoA, 64)
-        .storeCoins(sentA)
-        .storeUint(conditionalsHashA, 256)
-        .storeUint(seqnoB, 64)
-        .storeCoins(sentB)
-        .storeUint(conditionalsHashB, 256)
-        .storeUint(blockchain.now(), 32)
-        .storeInt(signedByA, 1)
-        .storeBool(false)
-        .endCell();
-
+    channel.quarantine = qua.serialize();
     return contract.setData(channel.serialize());
 }
 
@@ -591,95 +273,46 @@ fun challengeQuarantinedState(channel: Channel, msg: slice) {
     assert(channel.quarantine != null) throw ERROR_NO_QUARANTINED_STATE;
 
     // Start with the same checks
-    var challengedByA: int = msg.loadInt(1);
+    var challengedByA: bool = msg.loadBool();
     var signature: slice = msg.loadBits(512);
     assert(isSignatureValid(msg.hash(), signature, challengedByA ? channel.keyA : channel.keyB)) throw ERROR_NOT_AUTHORIZED;
-    assert(msg.loadUint(32) == TAG_CHALLENGE_QUARANTINEED_STATE) throw ERROR_WRONG_TAG;
-    assert(channel.id == msg.loadUint(128)) throw ERROR_WRONG_CHANNEL_ID;
 
-    var semiChannelA: slice = msg.loadRef().beginParse();
-    var signatureA: slice = semiChannelA.loadBits(512);
-    var semiChannelStateA: cell = semiChannelA.preloadRef();
-    assert(isSignatureValid(semiChannelStateA.hash(), signatureA, channel.keyA)) throw ERROR_NOT_AUTHORIZED;
-    var stateA: slice = semiChannelStateA.beginParse();
+    channel.verifyMessageType(mutate msg, TAG_CHALLENGE_QUARANTINEED_STATE);
 
-    var semiChannelB: slice = msg.loadRef().beginParse();
-    var signatureB: slice = semiChannelB.loadBits(512);
-    var semiChannelStateB: cell = semiChannelB.preloadRef();
-    assert(isSignatureValid(semiChannelStateB.hash(), signatureB, channel.keyB)) throw ERROR_NOT_AUTHORIZED;
-    var stateB: slice = semiChannelStateB.beginParse();
+    var a = Semichannel.parse(msg.loadRef(), channel.id, channel.keyA);
+    var b = Semichannel.parse(msg.loadRef(), channel.id, channel.keyB);
 
-    var (seqnoA: int, sentA: int, conditionalsHashA: int) = stateA.parseSemichannelData(channel.id);
-    var (seqnoBRefA: int, sentBRefA: int, _) = stateA.parseMaybeSemichannelBody();
+    channel.verifyStates(a, b);
 
-    var (seqnoB: int, sentB: int, conditionalsHashB: int) = stateB.parseSemichannelData(channel.id);
-    var (seqnoARefB: int, sentARefB: int, _) = stateB.parseMaybeSemichannelBody();
+    var qua = Quarantine.parse(channel.quarantine);
 
-    assert((seqnoB >= seqnoBRefA) &
-        (seqnoA >= seqnoARefB) &
-        (seqnoB >= channel.commitedSeqnoB) &
-        (seqnoA >= channel.commitedSeqnoA) &
-        (sentB >= sentBRefA) &
-        (sentA >= sentARefB)) throw ERROR_OUTDATED_STATE;
-
-    if (seqnoBRefA > 0) {
-        assert((seqnoBRefA >= channel.commitedSeqnoB)) throw ERROR_OUTDATED_STATE;
-    }
-    if (seqnoARefB > 0) {
-        assert((seqnoARefB >= channel.commitedSeqnoA)) throw ERROR_OUTDATED_STATE;
-    }
-
-    var storedStates: slice = channel.quarantine!.beginParse();
-    var (storedSeqnoA: int, storedSentA: int) = (storedStates.loadUint(64), storedStates.loadCoins());
-    var storedConditionalsHashA: int = storedStates.loadUint(256);
-
-    var (storedSeqnoB: int, storedSentB: int) = (storedStates.loadUint(64), storedStates.loadCoins());
-    var storedConditionalsHashB: int = storedStates.loadUint(256);
-
-    var quarantineeStarted: int = storedStates.loadUint(32);
-    assert(quarantineeStarted + channel.closureConfig.quarantineDuration > blockchain.now()) throw ERROR_TOO_LATE_FOR_QUARANTINE_CHALLENGE;
-
-    var prevSignedByA: int = storedStates.loadInt(1);
-    var quarantineeChallenged: int = storedStates.loadInt(1);
-    assert(~ quarantineeChallenged) throw ERROR_QUARANTINEE_ALREADY_CHALLENGED;
+    assert(qua.startedAt + channel.closureConfig.quarantineDuration > blockchain.now()) throw ERROR_TOO_LATE_FOR_QUARANTINE_CHALLENGE;
+    assert(!qua.challenged) throw ERROR_QUARANTINEE_ALREADY_CHALLENGED;
 
     // misbehvaior is when party which committed outdated state
     // or regenerate latest state with lower sent
     var misbehaviorDetected: bool = false;
-    if (prevSignedByA) {
-        misbehaviorDetected = (seqnoA > storedSeqnoA) | (sentA > storedSentA);
-        storedSeqnoA = seqnoA;
-        storedSentA = sentA;
-        storedConditionalsHashA = conditionalsHashA;
+    if (qua.committedbyA) {
+        misbehaviorDetected = (a.data.seqno > qua.stateA.seqno) | (a.data.sent > qua.stateA.sent);
+        qua.stateA = a.data;
     } else {
-        misbehaviorDetected = (seqnoB > storedSeqnoB) | (sentB > storedSentB);
-        storedSeqnoB = seqnoB;
-        storedSentB = sentB;
-        storedConditionalsHashB = conditionalsHashB;
+        misbehaviorDetected = (b.data.seqno > qua.stateB.seqno) | (b.data.sent > qua.stateB.sent);
+        qua.stateB = b.data;
     }
     // only counterparty can report misbehavior
-    assert(prevSignedByA != challengedByA) throw ERROR_UNAUTHORIZED_CHALLENGE;
+    assert(qua.committedbyA != challengedByA) throw ERROR_UNAUTHORIZED_CHALLENGE;
 
     if (misbehaviorDetected) {
-        // add fine to sent
-        if (prevSignedByA) {
-            storedSentA += channel.closureConfig.fine;
+        if (qua.committedbyA) {
+            qua.stateA.sent += channel.closureConfig.fine;
         } else {
-            storedSentB += channel.closureConfig.fine;
+            qua.stateB.sent += channel.closureConfig.fine;
         }
     }
 
-    channel.quarantine = beginCell()
-        .storeUint(storedSeqnoA, 64)
-        .storeCoins(storedSentA)
-        .storeUint(storedConditionalsHashA, 256)
-        .storeUint(storedSeqnoB, 64)
-        .storeCoins(storedSentB)
-        .storeUint(storedConditionalsHashB, 256)
-        .storeUint(quarantineeStarted, 32)
-        .storeInt(challengedByA, 1)
-        .storeBool(true)
-        .endCell();
+    qua.challenged = true;
+    qua.committedbyA = challengedByA;
+    channel.quarantine = qua.serialize();
 
     return contract.setData(channel.serialize());
 }
@@ -691,35 +324,24 @@ fun settleConditionals(channel: Channel, msg: slice) {
     var fromA: int = msg.loadInt(1);
     var signature: slice = msg.loadBits(512);
     assert(isSignatureValid(msg.hash(), signature, fromA ? channel.keyA : channel.keyB)) throw ERROR_NOT_AUTHORIZED;
-    assert(msg.loadUint(32) == TAG_SETTLE_CONDITIONALS) throw ERROR_WRONG_TAG;
-    assert(channel.id == msg.loadUint(128)) throw ERROR_WRONG_CHANNEL_ID;
+
+    channel.verifyMessageType(mutate msg, TAG_SETTLE_CONDITIONALS);
 
     var conditionalsToSettle: dict = msg.loadDict();
     var conditionalsProof: cell = msg.loadRef();
 
-    var storedStates: slice = channel.quarantine!.beginParse();
-    var (seqnoA: int, sentA: int, conditionalsHashA: int) =
-        (storedStates.loadUint(64), storedStates.loadCoins(), storedStates.loadUint(256));
+    var qua = Quarantine.parse(channel.quarantine);
 
-    var (seqnoB: int, sentB: int, conditionalsHashB: int) =
-        (storedStates.loadUint(64), storedStates.loadCoins(), storedStates.loadUint(256));
-
-    var quarantineeStarted: int = storedStates.loadUint(32);
-    var quarantineeFinished: int = quarantineeStarted + channel.closureConfig.quarantineDuration;
+    var quarantineeFinished: int = qua.startedAt + channel.closureConfig.quarantineDuration;
     assert(quarantineeFinished < blockchain.now()) throw ERROR_QUARANTINE_NOT_FINISHED;
     assert(quarantineeFinished + channel.closureConfig.closeDuration > blockchain.now()) throw ERROR_TOO_LATE_TO_SETTLE_CONDITIONALS;
 
-    var stateCommitedByA: int = storedStates.loadInt(1);
-    var challenged: int = storedStates.loadInt(1);
-    var (targetHash: int, targetSent: int) = (conditionalsHashA, sentA);
-    if (fromA) {
-        (targetHash, targetSent) = (conditionalsHashB, sentB);
-    }
+    var targetState = fromA ? qua.stateB : qua.stateA;
 
     var (csProof: slice, special: int) = conditionalsProof.beginParseSpecial();
     assert(special) throw ERROR_INCORRECT_CONDITIONALS_PROOF;
     assert(csProof.loadUint(8) == 3) throw ERROR_INCORRECT_CONDITIONALS_PROOF;
-    assert(csProof.preloadUint(256) == targetHash) throw ERROR_INCORRECT_CONDITIONALS_PROOF;
+    assert(csProof.preloadUint(256) == targetState.conditionalsHash) throw ERROR_INCORRECT_CONDITIONALS_PROOF;
 
     var target: cell = csProof.preloadRef();
     var more: bool = true;
@@ -735,27 +357,18 @@ fun settleConditionals(channel: Channel, msg: slice) {
             // That way both party authorized it.
             // Obviously, B should not sign incorrect code which (for instance) sends all money to A
             // The same way A should not run incorrect code which sends all money to B.
-            targetSent += executableCondition(input!);
+            targetState.sent += executableCondition(input!);
         }
     } while (more);
 
+    targetState.conditionalsHash = proofHash(target);
     if (fromA) {
-        (conditionalsHashB, sentB) = (proofHash(target), targetSent);
+        qua.stateB = targetState;
     } else {
-        (conditionalsHashA, sentA) = (proofHash(target), targetSent);
+        qua.stateA = targetState;
     }
 
-    channel.quarantine = beginCell()
-        .storeUint(seqnoA, 64)
-        .storeCoins(sentA)
-        .storeUint(conditionalsHashA, 256)
-        .storeUint(seqnoB, 64)
-        .storeCoins(sentB)
-        .storeUint(conditionalsHashB, 256)
-        .storeUint(quarantineeStarted, 32)
-        .storeInt(stateCommitedByA, 1)
-        .storeInt(challenged, 1)
-        .endCell();
+    channel.quarantine = qua.serialize();
     return contract.setData(channel.serialize());
 }
 
@@ -763,19 +376,14 @@ fun settleConditionals(channel: Channel, msg: slice) {
 fun finishUncooperativeClose(channel: Channel) {
     assert(channel.quarantine != null) throw ERROR_NO_QUARANTINED_STATE;
 
-    var storedStates: slice = channel.quarantine!.beginParse();
-    var (seqnoA: int, sentA: int, _: int) =
-        (storedStates.loadUint(64), storedStates.loadCoins(), storedStates.loadUint(256));
-    var (seqnoB: int, sentB: int, _: int) =
-        (storedStates.loadUint(64), storedStates.loadCoins(), storedStates.loadUint(256));
+    var qua = Quarantine.parse(channel.quarantine);
 
-    var quarantineeStarted: int = storedStates.loadUint(32);
-    assert(quarantineeStarted +
+    assert(qua.startedAt +
         channel.closureConfig.quarantineDuration +
         channel.closureConfig.closeDuration < blockchain.now()) throw ERROR_TOO_EARLY_TO_CLOSE;
 
-    channel.balance.sentB += sentB;
-    channel.balance.sentA += sentA;
+    channel.balance.sentB += qua.stateB.sent;
+    channel.balance.sentA += qua.stateA.sent;
 
     var balanceB = channel.balance.calcB();
     var balanceA = channel.balance.calcA();
@@ -787,8 +395,8 @@ fun finishUncooperativeClose(channel: Channel) {
         channel.balance.sentB -= balanceA;
     }
 
-    channel.commitedSeqnoA = seqnoA + 1;
-    channel.commitedSeqnoB = seqnoB + 1;
+    channel.commitedSeqnoA = qua.stateA.seqno + 1;
+    channel.commitedSeqnoB = qua.stateB.seqno + 1;
     closeChannel(channel);
 }
 
@@ -952,6 +560,24 @@ fun assignJettonWallet(channel: Channel, sender: slice, payload: slice) {
 }
 
 @inline
+fun Channel.verifyStates(self, a: Semichannel, b: Semichannel): void {
+    assert((a.data.seqno >= self.commitedSeqnoA) &
+        (b.data.seqno >= self.commitedSeqnoB) &
+        (b.data.seqno >= a.counterpartyData.seqno) &
+        (a.data.seqno >= b.counterpartyData.seqno) &
+        (b.data.seqno >= a.counterpartyData.sent) &
+        (a.data.sent >= b.counterpartyData.sent) &
+        (a.counterpartyData.seqno >= self.commitedSeqnoB) &
+        (b.counterpartyData.seqno >= self.commitedSeqnoA)) throw ERROR_OUTDATED_STATE;
+}
+
+@inline_ref
+fun Channel.verifyMessageType(self, mutate msg: slice, tag: uint32): void {
+    assert(msg.loadUint(32) == tag) throw ERROR_WRONG_TAG;
+    assert(self.id == msg.loadUint(128)) throw ERROR_WRONG_CHANNEL_ID;
+}
+
+@inline
 fun Balance.calcA(self): int {
     return (self.depositA + self.sentB) - (self.sentA + self.withdrawA);
 }
@@ -991,19 +617,13 @@ get getChannelState(): int {
         return STATE_OPEN;
     }
 
-    var storedStates: slice = channel.quarantine!.beginParse();
-    storedStates.skipBits(64);
-    storedStates.loadCoins();
-    storedStates.skipBits(1 + 64);
-    storedStates.loadCoins();
-    storedStates.skipBits(1);
+    var qua = Quarantine.parse(channel.quarantine);
 
-    var quarantineeStarted: int = storedStates.loadUint(32);
-    if (quarantineeStarted + channel.closureConfig.quarantineDuration > blockchain.now()) {
+    if (qua.startedAt + channel.closureConfig.quarantineDuration > blockchain.now()) {
         return STATE_CLOSURE_STARTED;
     }
 
-    if (quarantineeStarted +
+    if (qua.startedAt +
         channel.closureConfig.quarantineDuration +
         channel.closureConfig.closeDuration > blockchain.now()) {
         return STATE_SETTLING_CONDITIONALS;
