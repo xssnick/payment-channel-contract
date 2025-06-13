@@ -4,19 +4,19 @@ import "@stdlib/tvm-dicts"
 import "@stdlib/tvm-lowlevel"
 import "types.tolk"
 
-fun topUpBalance(channel: Channel, amount: int, msg: slice) {
-    assert(channel.inited) throw ERROR_NOT_INITED;
+fun Channel.topUpBalance(mutate self, amount: int, msg: slice) {
+    assert(self.inited) throw ERROR_NOT_INITED;
     // we allow topup only when there is no disput
-    assert(channel.quarantine == null) throw ERROR_QUARANTINE_ALREADY_ACTIVE;
+    assert(self.quarantine == null) throw ERROR_QUARANTINE_ALREADY_ACTIVE;
 
     var isA: bool = msg.loadBool();
     if (isA) {
-        channel.balance.depositA += amount;
+        self.balance.depositA += amount;
     } else {
-        channel.balance.depositB += amount;
+        self.balance.depositB += amount;
     }
 
-    return contract.setData(channel.serialize());
+    contract.setData(self.serialize());
 }
 
 fun initChannel(channel: Channel, msg: slice) {
@@ -423,11 +423,10 @@ fun onInternalMessage(_: int, amount: int, inMsgFull: cell, inMsg: slice) {
             assert(ok) throw ERROR_INVALID_EC_ID;
 
             var ecAmount: int = v!.loadVarUInt32();
-            topUpBalance(channel,ecAmount, inMsg);
+            channel.topUpBalance(ecAmount, inMsg);
         } else {
             assert(amount >= FEE_TON_ACCEPT) throw ERROR_AMOUNT_NOT_COVERS_FEE;
-
-            topUpBalance(channel, amount - FEE_TON_ACCEPT, inMsg);
+            channel.topUpBalance(amount - FEE_TON_ACCEPT, inMsg);
         }
     } else if (op == OP_JETTON_TRANSFER_NOTIFICATION) {
         // return because custom excess handled inside
@@ -481,7 +480,7 @@ fun acceptJettons(channel: Channel, sender: slice, tonAmount: int, payload: slic
     try {
         var innerOp: int = forwardPayload.loadInt(32);
         if (innerOp == OP_TOP_UP_BALANCE) {
-            topUpBalance(channel, jettonAmount, forwardPayload);
+            channel.topUpBalance(jettonAmount, forwardPayload);
             return sendExcess(channel,jettonSender);
         }
         throw 0xffff;
