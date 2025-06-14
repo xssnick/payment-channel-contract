@@ -228,16 +228,17 @@ fun Channel.cooperativeCommit(mutate self, msg: slice) {
     if (self.balance.withdrawB < withdrawB) {
         var amt = withdrawB - self.balance.withdrawB;
         self.balance.withdrawB = withdrawB;
-        assert(self.balance.calcB() >= 0) throw ERROR_NOT_ENOUGH_BALANCE;
         sendPayout(self, self.paymentConfig.addressB, amt, self.id, OP_CHANNEL_WITHDRAW, 0);
     }
 
     if (self.balance.withdrawA < withdrawA) {
         var amt = withdrawA - self.balance.withdrawA;
         self.balance.withdrawA = withdrawA;
-        assert(self.balance.calcA() >= 0) throw ERROR_NOT_ENOUGH_BALANCE;
         sendPayout(self,self.paymentConfig.addressA, amt, self.id, OP_CHANNEL_WITHDRAW, 0);
     }
+
+    assert(self.balance.calcA() >= 0 && self.balance.calcB() >= 0) throw ERROR_NOT_ENOUGH_BALANCE;
+
     contract.setData(self.serialize());
 }
 
