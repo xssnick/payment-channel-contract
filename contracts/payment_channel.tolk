@@ -564,7 +564,7 @@ fun Channel.verifyStates(self, a: Semichannel, b: Semichannel): void {
         (b.data.seqno >= self.commitedSeqnoB) &
         (b.data.seqno >= a.counterpartyData.seqno) &
         (a.data.seqno >= b.counterpartyData.seqno) &
-        (b.data.seqno >= a.counterpartyData.sent) &
+        (b.data.sent >= a.counterpartyData.sent) &
         (a.data.sent >= b.counterpartyData.sent) &
         (a.counterpartyData.seqno >= self.commitedSeqnoB) &
         (b.counterpartyData.seqno >= self.commitedSeqnoA)) throw ERROR_OUTDATED_STATE;
