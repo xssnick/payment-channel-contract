@@ -382,8 +382,8 @@ fun Channel.finishUncooperativeClose(mutate self) {
         self.closureConfig.quarantineDuration +
         self.closureConfig.closeDuration < blockchain.now()) throw ERROR_TOO_EARLY_TO_CLOSE;
 
-    self.balance.sentB += qua.stateB.sent;
-    self.balance.sentA += qua.stateA.sent;
+    self.balance.sentB = qua.stateB.sent;
+    self.balance.sentA = qua.stateA.sent;
 
     var balanceB = self.balance.calcB();
     var balanceA = self.balance.calcA();
