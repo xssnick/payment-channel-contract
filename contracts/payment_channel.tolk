@@ -163,14 +163,8 @@ fun Channel.cooperativeClose(mutate self, msg: slice) {
     var newSentA: int = msg.loadCoins();
     var newSentB: int = msg.loadCoins();
 
-    // balance can be moved only from A to B
-    // in case of topup after commit generation, commit will fail, to not loose balance
-    var oldBalanceSum = self.balance.calcA() + self.balance.calcB();
     self.balance.sentA = newSentA;
     self.balance.sentB = newSentB;
-    var newBalanceSum = self.balance.calcA() + self.balance.calcB();
-
-    assert(oldBalanceSum == newBalanceSum) throw ERROR_INCORRECT_SUMMARIZED_BALANCE;
 
     var newSeqnoA: int = msg.loadUint(64);
     var newSeqnoB: int = msg.loadUint(64);
@@ -197,14 +191,8 @@ fun Channel.cooperativeCommit(mutate self, msg: slice) {
     var newSentA: int = msg.loadCoins();
     var newSentB: int = msg.loadCoins();
 
-    // balance can be moved only from A to B
-    // in case of topup after commit generation, commit will fail, to not loose balance
-    var oldBalanceSum = self.balance.calcA() + self.balance.calcB();
     self.balance.sentA = newSentA;
     self.balance.sentB = newSentB;
-    var newBalanceSum = self.balance.calcA() + self.balance.calcB();
-
-    assert(oldBalanceSum == newBalanceSum) throw ERROR_INCORRECT_SUMMARIZED_BALANCE;
 
     var newSeqnoA: int = msg.loadUint(64);
     var newSeqnoB: int = msg.loadUint(64);
