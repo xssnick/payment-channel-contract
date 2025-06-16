@@ -525,7 +525,7 @@ fun sendExcess(channel: Channel, dest: slice) {
     if (channel.paymentConfig.currencyType == CURRENCY_TYPE_TON) {
         reserve += channel.balance.calcA() + channel.balance.calcB();
     }
-    reserveToncoinsOnBalance(reserve, 0);
+    reserveToncoinsOnBalance(reserve, RESERVE_MODE_AT_MOST);
 
    sendMessage(
         beginCell()
