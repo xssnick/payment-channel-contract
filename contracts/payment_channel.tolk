@@ -52,13 +52,13 @@ fun initChannel(channel: Channel, msg: slice) {
 }
 
 @inline_ref
-fun sendPayout(channel: Channel, sAddr: slice, amount: int, channelId: int, op: int, flags: int) {
-    if (channel.paymentConfig.currencyType == CURRENCY_TYPE_TON) {
+fun sendPayout(config: PaymentConfig, sAddr: slice, amount: int, channelId: int, op: int, flags: int) {
+    if (config.currencyType == CURRENCY_TYPE_TON) {
         sendPayoutTon(sAddr, amount, channelId, op, flags);
-    } else if (channel.paymentConfig.currencyType == CURRENCY_TYPE_JETTON) {
-        sendPayoutJetton(channel.paymentConfig.jettonWallet, sAddr, amount, channelId, op, flags);
-    } else if (channel.paymentConfig.currencyType == CURRENCY_TYPE_EC) {
-        sendPayoutEC(channel.paymentConfig.ecId, sAddr, amount, channelId, op, flags);
+    } else if (config.currencyType == CURRENCY_TYPE_JETTON) {
+        sendPayoutJetton(config.jettonWallet, sAddr, amount, channelId, op, flags);
+    } else if (config.currencyType == CURRENCY_TYPE_EC) {
+        sendPayoutEC(config.ecId, sAddr, amount, channelId, op, flags);
     }
 }
 
@@ -129,9 +129,9 @@ fun sendPayoutJetton(wallet: slice, sAddr: slice, amount: int, channelId: int, o
 }
 
 fun Channel.closeChannel(mutate self) {
-    sendPayout(self, self.paymentConfig.addressB, self.balance.calcB(), self.id, OP_CHANNEL_CLOSED, SEND_MODE_IGNORE_ERRORS);
+    sendPayout(self.paymentConfig, self.paymentConfig.addressB, self.balance.calcB(), self.id, OP_CHANNEL_CLOSED, SEND_MODE_IGNORE_ERRORS);
     // side A is considered to be deployer, so he will get rest contract's ton balance
-    sendPayout(self, self.paymentConfig.addressA, self.balance.calcA(), self.id, OP_CHANNEL_CLOSED, SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS);
+    sendPayout(self.paymentConfig, self.paymentConfig.addressA, self.balance.calcA(), self.id, OP_CHANNEL_CLOSED, SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS);
 
     // while self contract will be emptied it will survive for some time
     // by clearing storage we allow immediately reopen self with the same configs
@@ -218,14 +218,14 @@ fun Channel.cooperativeCommit(mutate self, msg: slice) {
     assert(withdrawAmount >= 0) throw ERROR_WITHDRAW_REGRESS;
     if (withdrawAmount > 0) {
         self.balance.withdrawB = withdrawB;
-        sendPayout(self, self.paymentConfig.addressB, withdrawAmount, self.id, OP_CHANNEL_WITHDRAW, 0);
+        sendPayout(self.paymentConfig, self.paymentConfig.addressB, withdrawAmount, self.id, OP_CHANNEL_WITHDRAW, 0);
     }
 
     withdrawAmount = withdrawA - self.balance.withdrawA;
     assert(withdrawAmount >= 0) throw ERROR_WITHDRAW_REGRESS;
     if (withdrawAmount > 0) {
         self.balance.withdrawA = withdrawA;
-        sendPayout(self,self.paymentConfig.addressA, withdrawAmount, self.id, OP_CHANNEL_WITHDRAW, 0);
+        sendPayout(self.paymentConfig,self.paymentConfig.addressA, withdrawAmount, self.id, OP_CHANNEL_WITHDRAW, 0);
     }
 
     assert(self.balance.calcA() >= 0 && self.balance.calcB() >= 0) throw ERROR_NOT_ENOUGH_BALANCE;
