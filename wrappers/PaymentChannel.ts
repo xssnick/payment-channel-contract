@@ -73,6 +73,18 @@ export type BalanceCommit = {
     sentB: bigint;
 }
 
+export type CloseState = {
+    seqnoA: bigint,
+    seqnoB: bigint,
+    sentA: bigint;
+    sentB: bigint;
+};
+export type SignedClose = {
+    state: CloseState | Cell,
+    sigA: Buffer | Cell,
+    sigB: Buffer | Cell
+};
+
 export type SignedCommit = {
     commit: BalanceCommit | Cell,
     sigA: Buffer | Cell,
@@ -119,6 +131,23 @@ function paymentConfigToCell(config: PaymentConfig) {
     }
 
     return bs.endCell();
+}
+
+export function mapState(state: number) {
+    switch(state) {
+        case 0:
+            return 'uninited';
+        case 1:
+            return 'open';
+        case 2:
+            return 'started';
+        case 3:
+            return 'settling_conditionals';
+        case 4:
+            return 'awaiting_finalization';
+        default:
+            throw RangeError("Unknown state " + state);
+    }
 }
 export function parseSemiChannelBody(body: Cell | Slice): SemiChannelBody {
     const ds = body instanceof Cell ? body.beginParse() : body;
@@ -317,6 +346,42 @@ export class PaymentChannel implements Contract {
         });
     }
 
+    static cooperativeCloseBody(state: CloseState, channelId: bigint) {
+        return beginCell()
+                   .storeUint(Tags.TAG_COOPERATIVE_CLOSE, 32)
+                   .storeUint(channelId, 128)
+                   .storeCoins(state.sentA)
+                   .storeCoins(state.sentB)
+                   .storeUint(state.seqnoA, 64)
+                   .storeUint(state.seqnoB, 64)
+            .endCell();
+    }
+    static cooperativeCloseMessage(state: SignedClose, channelId: bigint) {
+        const msgBody = state.state instanceof Cell ? state.state : PaymentChannel.cooperativeCloseBody(state.state, channelId);
+
+        const sigACell = Buffer.isBuffer(state.sigA) ? beginCell().storeBuffer(state.sigA).endCell() : state.sigA;
+        const sigBCell = Buffer.isBuffer(state.sigB) ? beginCell().storeBuffer(state.sigB).endCell() : state.sigB;
+
+        return beginCell()
+                .storeUint(Op.OP_COOPERATIVE_CLOSE, 32)
+                .storeSlice(msgBody.asSlice())
+                .storeRef(sigACell)
+                .storeRef(sigBCell)
+               .endCell();
+    }
+    async sendCooperativeClose(provider: ContractProvider, via: Sender, state: SignedClose, value: bigint = toNano('0.05'), channelId?: bigint) {
+        const curId = channelId ?? this.channelId;
+        if(!curId) {
+            throw new Error("Channel id is required");
+        }
+
+        await provider.internal(via, {
+            value,
+            sendMode: SendMode.PAY_GAS_SEPARATELY,
+            body: PaymentChannel.cooperativeCloseMessage(state, curId)
+        });
+
+    }
     static uncooperativeCloseMessage(isA: boolean, signedStateA: Cell, signedStateB: Cell, key: Buffer, channelId: bigint) {
         const msgBody = beginCell()
                         .storeUint(Tags.TAG_START_UNCOOPERATIVE_CLOSE, 32)
@@ -393,8 +458,11 @@ export class PaymentChannel implements Contract {
     }
 
     async getChannelState(provider: ContractProvider) {
-        const { stack } = await provider.get('getChannelState', []);
-        return stack.readNumber();
+
+            const { stack } = await provider.get('getChannelState', []);
+
+            const state = stack.readNumber();
+            return mapState(state);
     }
     async getChannelData(provider: ContractProvider) {
         const { stack } = await provider.get('getChannelData', []);
