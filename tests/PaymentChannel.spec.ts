@@ -418,6 +418,50 @@ describe('PaymentChannel', () => {
             });
         }
     });
+    it('should not allow cooperative commit with lower withdraw than before', async () => {
+        let dataBefore = await tonChannel.getChannelData();
+        const {sentA, sentB} = calcSends(dataBefore);
+
+        const balanceCommit: BalanceCommit = {
+            withdrawA: dataBefore.balance.withdrawA,
+            withdrawB: dataBefore.balance.withdrawB,
+            seqnoA: dataBefore.seqnoA + 1n,
+            seqnoB: dataBefore.seqnoB + 1n,
+            sentA,
+            sentB
+        };
+
+        const belowA = dataBefore.balance.withdrawA - 1n;
+        const belowB = dataBefore.balance.withdrawB - 1n;
+
+        const withdrawAbelow: BalanceCommit = {...balanceCommit, withdrawA: belowA};
+        const withdrawBbelow: BalanceCommit = {...balanceCommit, withdrawB: belowB};
+
+        const bothBelow: BalanceCommit = {...balanceCommit, withdrawA: belowA, withdrawB: belowB};
+
+
+        for(let testWallet of [walletA, walletB]) {
+            for(let testCommit of [withdrawAbelow, withdrawBbelow, bothBelow]) {
+                const commitBody = PaymentChannel.cooperativeCommitBody(testCommit, tonChannelConfig.id);
+
+                const sigA = await signCell(commitBody, keysA.secretKey);
+                const sigB = await signCell(commitBody, keysB.secretKey);
+
+                const res = await tonChannel.sendCooperativeCommit(testWallet.getSender(), {
+                    commit: testCommit,
+                    sigA,
+                    sigB
+                });
+                expect(res.transactions).toHaveTransaction({
+                    on: tonChannel.address,
+                    op: Op.OP_COOPERATIVE_COMMIT,
+                    aborted: true,
+                    exitCode: Errors.ERROR_WITHDRAW_REGRESS
+                });
+            }
+        }
+
+    });
     it('should not allow to send more than on party balance', async () => {
         let dataBefore = await tonChannel.getChannelData();
         const {sentA, sentB} = calcSends(dataBefore);
