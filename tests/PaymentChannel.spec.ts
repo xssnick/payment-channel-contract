@@ -442,6 +442,38 @@ describe('PaymentChannel', () => {
             });
         }
     });
+    it('should not accept cooperative commit for different channelId', async () => {
+        const dataBefore = await tonChannel.getChannelData();
+        const {sentA, sentB} = calcSends(dataBefore);
+
+        const msgValue = toNano('0.05');
+        const balanceCommit: BalanceCommit = {
+            sentA,
+            sentB,
+            // Just increment both, withc is perfectly ok
+            seqnoA: dataBefore.seqnoA + 1n,
+            seqnoB: dataBefore.seqnoB + 1n,
+            withdrawA: dataBefore.balance.withdrawA,
+            withdrawB: dataBefore.balance.withdrawB
+        };
+        const maxVal = Number(tonChannelConfig.id);
+        const curId = tonChannelConfig.id;
+        for(let testWallet of [walletA, walletB]) {
+            for(let testId of [curId - 1n, curId + 1n, curId + BigInt(getRandomInt(2, maxVal)), curId - BigInt(getRandomInt(2, maxVal))]) {
+                const commitBody = PaymentChannel.cooperativeCommitBody(balanceCommit, testId);
+                const sigA = await signCell(commitBody, keysA.secretKey);
+                const sigB = await signCell(commitBody, keysB.secretKey);
+
+                const res = await tonChannel.sendCooperativeCommit(testWallet.getSender(), {commit: commitBody, sigA, sigB}, msgValue);
+                expect(res.transactions).toHaveTransaction({
+                    on: tonChannel.address,
+                    op: Op.OP_COOPERATIVE_COMMIT,
+                    aborted: true,
+                    exitCode: Errors.ERROR_WRONG_CHANNEL_ID
+                });
+            }
+        }
+    });
     it('should be able to start uncooperative close', async () => {
 
         const prevState   = blockchain.snapshot();
