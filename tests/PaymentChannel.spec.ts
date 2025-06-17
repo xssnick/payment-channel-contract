@@ -862,6 +862,64 @@ describe('PaymentChannel', () => {
             }
         }
     });
+
+    it('should accept signed state without counterparty data', async () => {
+        const prevState   = blockchain.snapshot();
+        const stateBefore = await tonChannel.getChannelData();
+        const {sentA, sentB} = calcSends(stateBefore);
+
+        expect(stateBefore.quarantine).toBeNull();
+
+        const stateBodyA: SemiChannelBody = {
+            sent: sentA,
+            seqno: stateBefore.seqnoA,
+            conditionalsHash
+        };
+
+        const stateBodyB: SemiChannelBody = {
+            sent: sentB,
+            seqno: stateBefore.seqnoB,
+            conditionalsHash
+        };
+        const stateB = signSemiChannel({
+            channelId: tonChannelConfig.id,
+            data: stateBodyB,
+        }, keysB.secretKey);
+
+
+        const stateA = signSemiChannel({
+            channelId: tonChannelConfig.id,
+            data: stateBodyA,
+        }, keysA.secretKey);
+
+
+        for(let testWallet of [walletA, walletB]) {
+            const isA = testWallet === walletA;
+            const key = isA ? keysA.secretKey : keysB.secretKey;
+
+            const res = await tonChannel.sendStartUncoopClose(testWallet.getSender(), {
+                isA,
+                stateA,
+                stateB,
+                key
+            });
+            const startTx = findTransactionRequired(res.transactions, {
+                on: tonChannel.address,
+                op: Op.OP_START_UNCOOPERATIVE_CLOSE,
+                aborted: false
+            });
+
+            const dataAfter = await tonChannel.getChannelData();
+            expect(dataAfter.quarantine).not.toBeNull();
+            const quarantine = dataAfter.quarantine!;
+            expect(quarantine.startedAt).toEqual(startTx.now);
+            expect(quarantine.challenged).toBe(false);
+            expect(quarantine.committedbyA).toBe(isA);
+
+            await blockchain.loadFrom(prevState);
+        }
+    });
+
     it('should not be able to close before quarantine expire + closeDuration', async () => {
         const prevState = blockchain.snapshot();
 
