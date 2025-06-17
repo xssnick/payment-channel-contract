@@ -1,6 +1,6 @@
 import { Blockchain, BlockchainSnapshot, SandboxContract, TreasuryContract } from '@ton/sandbox';
 import { beginCell, Cell, Dictionary, generateMerkleProof, Slice, toNano } from '@ton/core';
-import { BalanceCommit, parseSemiChannelBody, PaymentChannel, PaymentChannelConfig, SemiChannel, SemiChannelBody, signSemiChannel } from '../wrappers/PaymentChannel';
+import { BalanceCommit, CloseState, mapState, PaymentChannel, PaymentChannelConfig, SemiChannel, SemiChannelBody, signSemiChannel } from '../wrappers/PaymentChannel';
 import '@ton/test-utils';
 import { compile } from '@ton/blueprint';
 import { KeyPair, getSecureRandomBytes, keyPairFromSeed } from '@ton/crypto';
@@ -9,6 +9,7 @@ import { Errors, Op } from '../wrappers/Constants';
 import { getMsgPrices } from './gasUtils';
 import { findTransaction, findTransactionRequired } from '@ton/test-utils';
 
+type ChannelData = Awaited<ReturnType<SandboxContract<PaymentChannel>['getChannelData']>>;
 describe('PaymentChannel', () => {
     let blockchain: Blockchain;
 
@@ -32,7 +33,7 @@ describe('PaymentChannel', () => {
 
     let depoFee = toNano('0.03');
 
-    let calcSends = (data: Awaited<ReturnType<SandboxContract<PaymentChannel>['getChannelData']>>) => {
+    let calcSends = (data: ChannelData) => {
         let sentA = data.balance.balanceA - (data.balance.depositA - data.balance.withdrawA);
         let sentB = data.balance.balanceB - (data.balance.depositB - data.balance.withdrawB);
         // If balance less than depo - withdraw, means there was transfer from balance
@@ -48,6 +49,20 @@ describe('PaymentChannel', () => {
             sentA,
             sentB
         }
+    }
+
+    let assertChannelClosed = (data: ChannelData, seqnoA: bigint, seqnoB: bigint) => {
+        expect(mapState(data.state)).toEqual("uninited");
+        expect(data.balance).toEqual({
+            balanceA: 0n,
+            balanceB: 0n,
+            depositA: 0n,
+            depositB: 0n,
+            withdrawA: 0n,
+            withdrawB: 0n
+        });
+        expect(data.seqnoA).toEqual(seqnoA);
+        expect(data.seqnoB).toEqual(seqnoB);
     }
 
     beforeAll(async () => {
@@ -936,6 +951,9 @@ describe('PaymentChannel', () => {
                 op: Op.OP_CHANNEL_CLOSED,
                 value: (v) => v! >= stateBefore.balance.balanceA - msgPrices.lumpPrice
             });
+
+            const dataAfter = await tonChannel.getChannelData();
+            assertChannelClosed(dataAfter, stateBefore.seqnoA + 1n, stateBefore.seqnoB + 1n);
         }
         await blockchain.loadFrom(prevState);
     });
