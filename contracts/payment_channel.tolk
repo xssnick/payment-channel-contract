@@ -25,7 +25,7 @@ fun initChannel(channel: Channel, msg: slice) {
     var isA: int = msg.loadInt(1);
     var signature: slice = msg.loadBits(512);
     assert(isSignatureValid(msg.hash(), signature, isA ? channel.keyA : channel.keyB)) throw ERROR_NOT_AUTHORIZED;
-    channel.verifyMessageType(mutate msg, TAG_INIT_CHANNEL);
+    msg.verifyMessageType(TAG_INIT_CHANNEL, channel.id);
 
     // must be 0, we handle adjustments in topup and withdraw
     assert((channel.balance.sentA | channel.balance.sentB | 
@@ -155,7 +155,7 @@ fun Channel.cooperativeClose(mutate self, msg: slice) {
     var sigB: slice = msg.loadRef().beginParse();
     var hash: int = msg.hash();
 
-    self.verifyMessageType(mutate msg, TAG_COOPERATIVE_CLOSE);
+    msg.verifyMessageType(TAG_COOPERATIVE_CLOSE, self.id);
 
     assert(isSignatureValid(hash, sigA, self.keyA) &
         isSignatureValid(hash, sigB, self.keyB)) throw ERROR_NOT_AUTHORIZED;
@@ -183,7 +183,7 @@ fun Channel.cooperativeCommit(mutate self, msg: slice) {
     var sigB: slice = msg.loadRef().beginParse();
     var hash: int = msg.hash();
 
-    self.verifyMessageType(mutate msg, TAG_COOPERATIVE_COMMIT);
+    msg.verifyMessageType(TAG_COOPERATIVE_COMMIT, self.id);
 
     assert(isSignatureValid(hash, sigA, self.keyA) &
         isSignatureValid(hash, sigB, self.keyB)) throw ERROR_NOT_AUTHORIZED;
@@ -240,7 +240,7 @@ fun startUncooperativeClose(channel: Channel, msg: slice) {
     var signature: slice = msg.loadBits(512);
     assert(isSignatureValid(msg.hash(), signature, signedByA ? channel.keyA : channel.keyB)) throw ERROR_NOT_AUTHORIZED;
 
-    channel.verifyMessageType(mutate msg, TAG_START_UNCOOPERATIVE_CLOSE);
+    msg.verifyMessageType(TAG_START_UNCOOPERATIVE_CLOSE, channel.id);
 
     var a = Semichannel.parse(msg.loadRef(), channel.id, channel.keyA);
     var b = Semichannel.parse(msg.loadRef(), channel.id, channel.keyB);
@@ -567,9 +567,9 @@ fun Channel.verifyStates(self, a: Semichannel, b: Semichannel): void {
 }
 
 @inline_ref
-fun Channel.verifyMessageType(self, mutate msg: slice, tag: uint32): void {
-    assert(msg.loadUint(32) == tag) throw ERROR_WRONG_TAG;
-    assert(self.id == msg.loadUint(128)) throw ERROR_WRONG_CHANNEL_ID;
+fun slice.verifyMessageType(mutate self, tag: uint32, id: int): void {
+    assert(self.loadUint(32) == tag) throw ERROR_WRONG_TAG;
+    assert(id == self.loadUint(128)) throw ERROR_WRONG_CHANNEL_ID;
 }
 
 @inline
