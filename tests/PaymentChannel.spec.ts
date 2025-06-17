@@ -489,6 +489,198 @@ describe('PaymentChannel', () => {
             }
         }
     });
+    it('should not accept uncooperative commit signed body for cooperative close', async () => {
+        // Since coop commit message is exdended coop close message
+        // coop commit can be successfully parsed as commit close
+        // Thus we expect tag to be checked
+
+        const dataBefore = await tonChannel.getChannelData();
+        const {sentA, sentB} = calcSends(dataBefore);
+
+        const closeBody = PaymentChannel.cooperativeCommitBody({
+            seqnoA: dataBefore.seqnoA + 1n,
+            seqnoB: dataBefore.seqnoB + 1n,
+            sentA,
+            sentB,
+            withdrawA: dataBefore.balance.withdrawA,
+            withdrawB: dataBefore.balance.withdrawB
+        }, tonChannelConfig.id);
+
+        const sigA = await signCell(closeBody, keysA.secretKey);
+        const sigB = await signCell(closeBody, keysB.secretKey);
+
+        for(let testWallet of [walletA, walletB]) {
+            const res = await tonChannel.sendCooperativeClose(testWallet.getSender(), {state: closeBody, sigA, sigB});
+
+            expect(res.transactions).toHaveTransaction({
+                on: tonChannel.address,
+                op: Op.OP_COOPERATIVE_CLOSE,
+                aborted: true,
+                exitCode: Errors.ERROR_WRONG_TAG
+            });
+        }
+    });
+    it('should reject cooperativeClose on different channelId', async  () => {
+        const dataBefore = await tonChannel.getChannelData();
+        const {sentA, sentB} = calcSends(dataBefore);
+
+        const origId = tonChannelConfig.id;
+
+        const oneBelow = origId - 1n
+        const rndBelow = origId - BigInt(getRandomInt(2, Number(origId)));
+
+        const oneAbove = origId + 1n
+        const rndAbove = origId - BigInt(getRandomInt(2, Number(origId)));
+
+        const closeState: CloseState = {
+            seqnoA: dataBefore.seqnoA,
+            seqnoB: dataBefore.seqnoB,
+            sentA,
+            sentB
+        };
+
+
+        for(let testWallet of [walletA, walletB]) {
+            for(let testId of [oneBelow, oneAbove, rndBelow, rndAbove]) {
+                const closeBody = PaymentChannel.cooperativeCloseBody(closeState, testId);
+
+                const sigA = await signCell(closeBody, keysA.secretKey);
+                const sigB = await signCell(closeBody, keysB.secretKey);
+
+                const res = await tonChannel.sendCooperativeClose(testWallet.getSender(), {state: closeBody, sigA, sigB});
+
+                expect(res.transactions).toHaveTransaction({
+                    on: tonChannel.address,
+                    op: Op.OP_COOPERATIVE_CLOSE,
+                    aborted: true,
+                    exitCode: Errors.ERROR_WRONG_CHANNEL_ID
+                });
+            }
+        }
+    });
+    it('both seqno should be incremented on cooperativeClose', async () => {
+        const dataBefore = await tonChannel.getChannelData();
+        const {sentA, sentB} = calcSends(dataBefore);
+
+        const origSeqno = {seqnoA: dataBefore.seqnoA, seqnoB: dataBefore.seqnoB};
+        const Alower = {seqnoA: dataBefore.seqnoA -1n, seqnoB: dataBefore.seqnoB};
+        const Blower = {seqnoA: dataBefore.seqnoA, seqnoB: dataBefore.seqnoB - 1n};
+        const onlyA  = {seqnoA: dataBefore.seqnoA + 1n, seqnoB: dataBefore.seqnoB}
+        const onlyB  = {seqnoA: dataBefore.seqnoA, seqnoB: dataBefore.seqnoB + 1n}
+
+        for(let testWallet of [walletA, walletB]) {
+            for(let testSeqno of [origSeqno, Alower, Blower, onlyA, onlyB]) {
+                const closeState: CloseState = {
+                    seqnoA: testSeqno.seqnoA,
+                    seqnoB: testSeqno.seqnoB,
+                    sentA,
+                    sentB
+                };
+
+                const closeBody = PaymentChannel.cooperativeCloseBody(closeState, tonChannelConfig.id);
+                const sigA = await signCell(closeBody, keysA.secretKey);
+                const sigB = await signCell(closeBody, keysB.secretKey);
+
+                const res = await tonChannel.sendCooperativeClose(testWallet.getSender(), {state: closeBody, sigA, sigB});
+
+                expect(res.transactions).toHaveTransaction({
+                    on: tonChannel.address,
+                    op: Op.OP_COOPERATIVE_CLOSE,
+                    aborted: true,
+                    exitCode: Errors.ERROR_SEQNO_REGRESS
+                });
+            }
+        }
+    });
+    it('should reject cooperative close with invalid signature', async () => {
+        const dataBefore = await tonChannel.getChannelData();
+        const {sentA, sentB} = calcSends(dataBefore);
+
+        const closeState: CloseState = {
+            seqnoA: dataBefore.seqnoA + 1n,
+            seqnoB: dataBefore.seqnoB + 1n,
+            sentA,
+            sentB
+        }
+
+        const closeBody = PaymentChannel.cooperativeCloseBody(closeState, tonChannelConfig.id);
+        const sigA = await signCell(closeBody, keysA.secretKey);
+        const sigB = await signCell(closeBody, keysB.secretKey);
+
+        for(let testWallet of [walletA, walletB]) {
+            // Just swith the signatures around
+            const res = await tonChannel.sendCooperativeClose(testWallet.getSender(), {state: closeState, sigA: sigB, sigB: sigA});
+
+            expect(res.transactions).toHaveTransaction({
+                on: tonChannel.address,
+                op: Op.OP_COOPERATIVE_CLOSE,
+                aborted: true,
+                exitCode: Errors.ERROR_NOT_AUTHORIZED
+            });
+        }
+    });
+    it('should be able to close channel cooperatively', async () => {
+        const prevState  = blockchain.snapshot();
+
+        const dataBefore = await tonChannel.getChannelData();
+        const {sentA, sentB} = calcSends(dataBefore);
+
+        const msgValue = toNano('0.05');
+
+        const addSentA = BigInt(getRandomInt(1, 100_000));
+        const addSentB = BigInt(getRandomInt(1, 100_000));
+
+        const delta = addSentA - addSentB;
+
+        let expectedA = dataBefore.balance.balanceA;
+        let expectedB = dataBefore.balance.balanceB;
+
+        expectedA -= delta;
+        expectedB += delta;
+
+        const closeState: CloseState = {
+            seqnoA: dataBefore.seqnoA + 1n,
+            seqnoB: dataBefore.seqnoB + 1n,
+            sentA: sentA + addSentA,
+            sentB: sentB + addSentB
+        }
+
+        const closeBody = PaymentChannel.cooperativeCloseBody(closeState, tonChannelConfig.id);
+
+        const sigA = await signCell(closeBody, keysA.secretKey);
+        const sigB = await signCell(closeBody, keysB.secretKey);
+
+        const smc = await blockchain.getContract(tonChannel.address);
+        for(let testWallet of [walletA, walletB]) {
+            try {
+                const res = await tonChannel.sendCooperativeClose(testWallet.getSender(), {state: closeState, sigA, sigB}, msgValue);
+                expect(res.transactions).toHaveTransaction({
+                    on: tonChannel.address,
+                    op: Op.OP_COOPERATIVE_CLOSE,
+                    aborted: false,
+                    outMessagesCount: 2
+                });
+                expect(res.transactions).toHaveTransaction({
+                    on: walletB.address,
+                    op: Op.OP_CHANNEL_CLOSED,
+                    value: expectedB - msgPrices.lumpPrice
+                });
+                expect(res.transactions).toHaveTransaction({
+                    on: walletA.address,
+                    op: Op.OP_CHANNEL_CLOSED,
+                    // Wallet A gets rest of the balance
+                    value: (v) => v! > expectedA - msgPrices.lumpPrice
+                });
+
+                const dataAfter = await tonChannel.getChannelData();
+
+                expect(smc.balance).toBe(0n);
+                assertChannelClosed(dataAfter, closeState.seqnoA, closeState.seqnoB);
+            } finally {
+                await blockchain.loadFrom(prevState);
+            }
+        }
+    });
     it('should be able to start uncooperative close', async () => {
 
         const prevState   = blockchain.snapshot();
