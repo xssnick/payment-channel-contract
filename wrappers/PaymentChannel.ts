@@ -1,7 +1,6 @@
 import { Address, beginCell, Cell, Contract, contractAddress, ContractProvider, Dictionary, Sender, SendMode, Slice, toNano } from '@ton/core';
 import { Op, Tags } from './Constants';
 import { sign } from '@ton/crypto';
-import { patchV5R1ActionsSendMode } from '@ton/ton/dist/wallets/WalletContractV5R1';
 
 export type ClosureConfig =  {
     quarantineDuration: number;
