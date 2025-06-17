@@ -391,7 +391,7 @@ describe('PaymentChannel', () => {
             sentB,
         };
         const excessiveWithdrawB: BalanceCommit = {
-            withdrawA: dataBefore.balance.withdrawB,
+            withdrawA: dataBefore.balance.withdrawA,
             withdrawB: dataBefore.balance.withdrawB + dataBefore.balance.balanceB + 1n,
             seqnoA: dataBefore.seqnoA + 2n,
             seqnoB: dataBefore.seqnoB + 2n,
