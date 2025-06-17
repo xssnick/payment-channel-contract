@@ -213,16 +213,19 @@ fun Channel.cooperativeCommit(mutate self, msg: slice) {
     var withdrawA: int = msg.loadCoins();
     var withdrawB: int = msg.loadCoins();
 
-    if (self.balance.withdrawB < withdrawB) {
-        var amt = withdrawB - self.balance.withdrawB;
+
+    var withdrawAmount = withdrawB - self.balance.withdrawB;
+    assert(withdrawAmount >= 0) throw ERROR_WITHDRAW_REGRESS;
+    if (withdrawAmount > 0) {
         self.balance.withdrawB = withdrawB;
-        sendPayout(self, self.paymentConfig.addressB, amt, self.id, OP_CHANNEL_WITHDRAW, 0);
+        sendPayout(self, self.paymentConfig.addressB, withdrawAmount, self.id, OP_CHANNEL_WITHDRAW, 0);
     }
 
-    if (self.balance.withdrawA < withdrawA) {
-        var amt = withdrawA - self.balance.withdrawA;
+    withdrawAmount = withdrawA - self.balance.withdrawA;
+    assert(withdrawAmount >= 0) throw ERROR_WITHDRAW_REGRESS;
+    if (withdrawAmount > 0) {
         self.balance.withdrawA = withdrawA;
-        sendPayout(self,self.paymentConfig.addressA, amt, self.id, OP_CHANNEL_WITHDRAW, 0);
+        sendPayout(self,self.paymentConfig.addressA, withdrawAmount, self.id, OP_CHANNEL_WITHDRAW, 0);
     }
 
     assert(self.balance.calcA() >= 0 && self.balance.calcB() >= 0) throw ERROR_NOT_ENOUGH_BALANCE;

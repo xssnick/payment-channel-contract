@@ -43,6 +43,7 @@ export abstract class Errors {
     static ERROR_JETTON_WALLET_ALREADY_INSTALLED = 124;
     static ERROR_QUARANTINEE_ALREADY_CHALLENGED = 125;
     static ERROR_INCORRECT_SUMMARIZED_BALANCE = 126;
+    static ERROR_WITHDRAW_REGRESS = 127;
 }
 
 export abstract class Tags {
