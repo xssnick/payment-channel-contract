@@ -245,7 +245,7 @@ fun startUncooperativeClose(channel: Channel, msg: slice) {
     var a = Semichannel.parse(msg.loadRef(), channel.id, channel.keyA);
     var b = Semichannel.parse(msg.loadRef(), channel.id, channel.keyB);
 
-    channel.verifyStates(a, b);
+    verifyStates(channel.commitedSeqnoA, channel.commitedSeqnoB,a, b);
 
     var qua = Quarantine{
         stateA: a.data,
@@ -268,12 +268,12 @@ fun challengeQuarantinedState(channel: Channel, msg: slice) {
     var signature: slice = msg.loadBits(512);
     assert(isSignatureValid(msg.hash(), signature, challengedByA ? channel.keyA : channel.keyB)) throw ERROR_NOT_AUTHORIZED;
 
-    channel.verifyMessageType(mutate msg, TAG_CHALLENGE_QUARANTINEED_STATE);
+    msg.verifyMessageType(TAG_CHALLENGE_QUARANTINEED_STATE, channel.id);
 
     var a = Semichannel.parse(msg.loadRef(), channel.id, channel.keyA);
     var b = Semichannel.parse(msg.loadRef(), channel.id, channel.keyB);
 
-    channel.verifyStates(a, b);
+    verifyStates(channel.commitedSeqnoA, channel.commitedSeqnoB, a, b);
 
     var qua = Quarantine.parse(channel.quarantine);
 
@@ -316,7 +316,7 @@ fun settleConditionals(channel: Channel, msg: slice) {
     var signature: slice = msg.loadBits(512);
     assert(isSignatureValid(msg.hash(), signature, fromA ? channel.keyA : channel.keyB)) throw ERROR_NOT_AUTHORIZED;
 
-    channel.verifyMessageType(mutate msg, TAG_SETTLE_CONDITIONALS);
+    msg.verifyMessageType(TAG_SETTLE_CONDITIONALS, channel.id);
 
     var conditionalsToSettle: dict = msg.loadDict();
     var conditionalsProof: cell = msg.loadRef();
@@ -550,19 +550,19 @@ fun assignJettonWallet(channel: Channel, sender: slice, payload: slice) {
 }
 
 @inline
-fun Channel.verifyStates(self, a: Semichannel, b: Semichannel): void {
-    assert((a.data.seqno >= self.commitedSeqnoA) &
-        (b.data.seqno >= self.commitedSeqnoB) &
+fun verifyStates(commitedSeqnoA: int, commitedSeqnoB: int, a: Semichannel, b: Semichannel): void {
+    assert((a.data.seqno >= commitedSeqnoA) &
+        (b.data.seqno >= commitedSeqnoB) &
         (b.data.seqno >= a.counterpartyData.seqno) &
         (a.data.seqno >= b.counterpartyData.seqno) &
         (b.data.sent >= a.counterpartyData.sent) &
         (a.data.sent >= b.counterpartyData.sent)) throw ERROR_OUTDATED_STATE;
 
         if(a.counterpartyData.seqno > 0) {
-            assert(a.counterpartyData.seqno >= self.commitedSeqnoB) throw ERROR_OUTDATED_STATE;
+            assert(a.counterpartyData.seqno >= commitedSeqnoB) throw ERROR_OUTDATED_STATE;
         }
         if(b.counterpartyData.seqno > 0) {
-            assert(b.counterpartyData.seqno >= self.commitedSeqnoA) throw ERROR_OUTDATED_STATE;
+            assert(b.counterpartyData.seqno >= commitedSeqnoA) throw ERROR_OUTDATED_STATE;
         }
 }
 
