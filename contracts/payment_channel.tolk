@@ -4,19 +4,19 @@ import "@stdlib/tvm-dicts"
 import "@stdlib/tvm-lowlevel"
 import "types.tolk"
 
-fun topUpBalance(channel: Channel, amount: int, msg: slice) {
-    assert(channel.inited) throw ERROR_NOT_INITED;
+fun Channel.topUpBalance(mutate self, amount: int, msg: slice) {
+    assert(self.inited) throw ERROR_NOT_INITED;
     // we allow topup only when there is no disput
-    assert(channel.quarantine == null) throw ERROR_QUARANTINE_ALREADY_ACTIVE;
+    assert(self.quarantine == null) throw ERROR_QUARANTINE_ALREADY_ACTIVE;
 
     var isA: bool = msg.loadBool();
     if (isA) {
-        channel.balance.depositA += amount;
+        self.balance.depositA += amount;
     } else {
-        channel.balance.depositB += amount;
+        self.balance.depositB += amount;
     }
 
-    return contract.setData(channel.serialize());
+    contract.setData(self.serialize());
 }
 
 fun initChannel(channel: Channel, msg: slice) {
@@ -25,7 +25,7 @@ fun initChannel(channel: Channel, msg: slice) {
     var isA: int = msg.loadInt(1);
     var signature: slice = msg.loadBits(512);
     assert(isSignatureValid(msg.hash(), signature, isA ? channel.keyA : channel.keyB)) throw ERROR_NOT_AUTHORIZED;
-    channel.verifyMessageType(mutate msg, TAG_INIT_CHANNEL);
+    msg.verifyMessageType(TAG_INIT_CHANNEL, channel.id);
 
     // must be 0, we handle adjustments in topup and withdraw
     assert((channel.balance.sentA | channel.balance.sentB | 
@@ -52,13 +52,13 @@ fun initChannel(channel: Channel, msg: slice) {
 }
 
 @inline_ref
-fun sendPayout(channel: Channel, sAddr: slice, amount: int, channelId: int, op: int, flags: int) {
-    if (channel.paymentConfig.currencyType == CURRENCY_TYPE_TON) {
+fun sendPayout(config: PaymentConfig, sAddr: slice, amount: int, channelId: int, op: int, flags: int) {
+    if (config.currencyType == CURRENCY_TYPE_TON) {
         sendPayoutTon(sAddr, amount, channelId, op, flags);
-    } else if (channel.paymentConfig.currencyType == CURRENCY_TYPE_JETTON) {
-        sendPayoutJetton(channel.paymentConfig.jettonWallet, sAddr, amount, channelId, op, flags);
-    } else if (channel.paymentConfig.currencyType == CURRENCY_TYPE_EC) {
-        sendPayoutEC(channel.paymentConfig.ecId, sAddr, amount, channelId, op, flags);
+    } else if (config.currencyType == CURRENCY_TYPE_JETTON) {
+        sendPayoutJetton(config.jettonWallet, sAddr, amount, channelId, op, flags);
+    } else if (config.currencyType == CURRENCY_TYPE_EC) {
+        sendPayoutEC(config.ecId, sAddr, amount, channelId, op, flags);
     }
 }
 
@@ -128,15 +128,15 @@ fun sendPayoutJetton(wallet: slice, sAddr: slice, amount: int, channelId: int, o
     );
 }
 
-fun closeChannel(channel: Channel) {
-    sendPayout(channel, channel.paymentConfig.addressB, channel.balance.calcB(), channel.id, OP_CHANNEL_CLOSED, SEND_MODE_IGNORE_ERRORS);
+fun Channel.closeChannel(mutate self) {
+    sendPayout(self.paymentConfig, self.paymentConfig.addressB, self.balance.calcB(), self.id, OP_CHANNEL_CLOSED, SEND_MODE_IGNORE_ERRORS);
     // side A is considered to be deployer, so he will get rest contract's ton balance
-    sendPayout(channel, channel.paymentConfig.addressA, channel.balance.calcA(), channel.id, OP_CHANNEL_CLOSED, SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS);
+    sendPayout(self.paymentConfig, self.paymentConfig.addressA, self.balance.calcA(), self.id, OP_CHANNEL_CLOSED, SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS);
 
-    // while channel contract will be emptied it will survive for some time
-    // by clearing storage we allow immediately reopen channel with the same configs
-    channel.inited = false;
-    channel.balance = Balance {
+    // while self contract will be emptied it will survive for some time
+    // by clearing storage we allow immediately reopen self with the same configs
+    self.inited = false;
+    self.balance = Balance {
         depositA: 0,
         depositB: 0,
         withdrawA: 0,
@@ -144,102 +144,93 @@ fun closeChannel(channel: Channel) {
         sentA: 0,
         sentB: 0,
     };
-    channel.quarantine = null;
+    self.quarantine = null;
 
-    return contract.setData(channel.serialize());
+    return contract.setData(self.serialize());
 }
 
 @inline_ref
-fun cooperativeClose(channel: Channel, msg: slice) {
+fun Channel.cooperativeClose(mutate self, msg: slice) {
     var sigA: slice = msg.loadRef().beginParse();
     var sigB: slice = msg.loadRef().beginParse();
     var hash: int = msg.hash();
 
-    channel.verifyMessageType(mutate msg, TAG_COOPERATIVE_CLOSE);
+    msg.verifyMessageType(TAG_COOPERATIVE_CLOSE, self.id);
 
-    assert(isSignatureValid(hash, sigA, channel.keyA) &
-        isSignatureValid(hash, sigB, channel.keyB)) throw ERROR_NOT_AUTHORIZED;
+    assert(isSignatureValid(hash, sigA, self.keyA) &
+        isSignatureValid(hash, sigB, self.keyB)) throw ERROR_NOT_AUTHORIZED;
 
     var newSentA: int = msg.loadCoins();
     var newSentB: int = msg.loadCoins();
 
-    // balance can be moved only from A to B
-    // in case of topup after commit generation, commit will fail, to not loose balance
-    var oldBalanceSum = channel.balance.calcA() + channel.balance.calcB();
-    channel.balance.sentA = newSentA;
-    channel.balance.sentB = newSentB;
-    var newBalanceSum = channel.balance.calcA() + channel.balance.calcB();
-
-    assert(oldBalanceSum == newBalanceSum) throw ERROR_INCORRECT_SUMMARIZED_BALANCE;
+    self.balance.sentA = newSentA;
+    self.balance.sentB = newSentB;
 
     var newSeqnoA: int = msg.loadUint(64);
     var newSeqnoB: int = msg.loadUint(64);
-    assert((channel.commitedSeqnoA < newSeqnoA) &
-        (channel.commitedSeqnoB < newSeqnoB)) throw ERROR_SEQNO_REGRESS;
+    assert((self.commitedSeqnoA < newSeqnoA) &
+        (self.commitedSeqnoB < newSeqnoB)) throw ERROR_SEQNO_REGRESS;
 
-    channel.commitedSeqnoA = newSeqnoA;
-    channel.commitedSeqnoB = newSeqnoB;
+    self.commitedSeqnoA = newSeqnoA;
+    self.commitedSeqnoB = newSeqnoB;
 
-    closeChannel(channel);
+    self.closeChannel();
 }
 
 @inline_ref
-fun cooperativeCommit(channel: Channel, msg: slice) {
+fun Channel.cooperativeCommit(mutate self, msg: slice) {
     var sigA: slice = msg.loadRef().beginParse();
     var sigB: slice = msg.loadRef().beginParse();
     var hash: int = msg.hash();
 
-    channel.verifyMessageType(mutate msg, TAG_COOPERATIVE_COMMIT);
+    msg.verifyMessageType(TAG_COOPERATIVE_COMMIT, self.id);
 
-    assert(isSignatureValid(hash, sigA, channel.keyA) &
-        isSignatureValid(hash, sigB, channel.keyB)) throw ERROR_NOT_AUTHORIZED;
+    assert(isSignatureValid(hash, sigA, self.keyA) &
+        isSignatureValid(hash, sigB, self.keyB)) throw ERROR_NOT_AUTHORIZED;
 
     var newSentA: int = msg.loadCoins();
     var newSentB: int = msg.loadCoins();
 
-    // balance can be moved only from A to B
-    // in case of topup after commit generation, commit will fail, to not loose balance
-    var oldBalanceSum = channel.balance.calcA() + channel.balance.calcB();
-    channel.balance.sentA = newSentA;
-    channel.balance.sentB = newSentB;
-    var newBalanceSum = channel.balance.calcA() + channel.balance.calcB();
-
-    assert(oldBalanceSum == newBalanceSum) throw ERROR_INCORRECT_SUMMARIZED_BALANCE;
+    self.balance.sentA = newSentA;
+    self.balance.sentB = newSentB;
 
     var newSeqnoA: int = msg.loadUint(64);
     var newSeqnoB: int = msg.loadUint(64);
-    assert((channel.commitedSeqnoA < newSeqnoA) &
-        (channel.commitedSeqnoB < newSeqnoB)) throw ERROR_SEQNO_REGRESS;
+    assert((self.commitedSeqnoA < newSeqnoA) &
+        (self.commitedSeqnoB < newSeqnoB)) throw ERROR_SEQNO_REGRESS;
 
-    channel.commitedSeqnoA = newSeqnoA;
-    channel.commitedSeqnoB = newSeqnoB;
+    self.commitedSeqnoA = newSeqnoA;
+    self.commitedSeqnoB = newSeqnoB;
 
-    if (channel.quarantine != null) {
-        var qua = Quarantine.parse(channel.quarantine);
+    if (self.quarantine != null) {
+        var qua = Quarantine.parse(self.quarantine);
         if ((newSeqnoA > qua.stateA.seqno) | (newSeqnoB > qua.stateB.seqno)) {
             // quarantinened state is older than newly commited one, drop it
-            channel.quarantine = null;
+            self.quarantine = null;
         }
     }
 
     var withdrawA: int = msg.loadCoins();
     var withdrawB: int = msg.loadCoins();
 
-    if (channel.balance.withdrawB < withdrawB) {
-        var amt = withdrawB - channel.balance.withdrawB;
-        channel.balance.withdrawB = withdrawB;
-        assert(channel.balance.calcB() >= 0) throw ERROR_NOT_ENOUGH_BALANCE;
-        sendPayout(channel, channel.paymentConfig.addressB, amt, channel.id, OP_CHANNEL_WITHDRAW, 0);
+
+    var withdrawAmount = withdrawB - self.balance.withdrawB;
+    assert(withdrawAmount >= 0) throw ERROR_WITHDRAW_REGRESS;
+    if (withdrawAmount > 0) {
+        self.balance.withdrawB = withdrawB;
+        sendPayout(self.paymentConfig, self.paymentConfig.addressB, withdrawAmount, self.id, OP_CHANNEL_WITHDRAW, 0);
     }
 
-    if (channel.balance.withdrawA < withdrawA) {
-        var amt = withdrawA - channel.balance.withdrawA;
-        channel.balance.withdrawA = withdrawA;
-        assert(channel.balance.calcA() >= 0) throw ERROR_NOT_ENOUGH_BALANCE;
-        sendPayout(channel,channel.paymentConfig.addressA, amt, channel.id, OP_CHANNEL_WITHDRAW, 0);
+    withdrawAmount = withdrawA - self.balance.withdrawA;
+    assert(withdrawAmount >= 0) throw ERROR_WITHDRAW_REGRESS;
+    if (withdrawAmount > 0) {
+        self.balance.withdrawA = withdrawA;
+        sendPayout(self.paymentConfig,self.paymentConfig.addressA, withdrawAmount, self.id, OP_CHANNEL_WITHDRAW, 0);
     }
 
-    return contract.setData(channel.serialize());
+    assert(self.balance.calcA() >= 0 && self.balance.calcB() >= 0) throw ERROR_NOT_ENOUGH_BALANCE;
+
+    contract.setData(self.serialize());
 }
 
 @inline_ref
@@ -249,12 +240,12 @@ fun startUncooperativeClose(channel: Channel, msg: slice) {
     var signature: slice = msg.loadBits(512);
     assert(isSignatureValid(msg.hash(), signature, signedByA ? channel.keyA : channel.keyB)) throw ERROR_NOT_AUTHORIZED;
 
-    channel.verifyMessageType(mutate msg, TAG_START_UNCOOPERATIVE_CLOSE);
+    msg.verifyMessageType(TAG_START_UNCOOPERATIVE_CLOSE, channel.id);
 
     var a = Semichannel.parse(msg.loadRef(), channel.id, channel.keyA);
     var b = Semichannel.parse(msg.loadRef(), channel.id, channel.keyB);
 
-    channel.verifyStates(a, b);
+    verifyStates(channel.commitedSeqnoA, channel.commitedSeqnoB,a, b);
 
     var qua = Quarantine{
         stateA: a.data,
@@ -277,12 +268,12 @@ fun challengeQuarantinedState(channel: Channel, msg: slice) {
     var signature: slice = msg.loadBits(512);
     assert(isSignatureValid(msg.hash(), signature, challengedByA ? channel.keyA : channel.keyB)) throw ERROR_NOT_AUTHORIZED;
 
-    channel.verifyMessageType(mutate msg, TAG_CHALLENGE_QUARANTINEED_STATE);
+    msg.verifyMessageType(TAG_CHALLENGE_QUARANTINEED_STATE, channel.id);
 
     var a = Semichannel.parse(msg.loadRef(), channel.id, channel.keyA);
     var b = Semichannel.parse(msg.loadRef(), channel.id, channel.keyB);
 
-    channel.verifyStates(a, b);
+    verifyStates(channel.commitedSeqnoA, channel.commitedSeqnoB, a, b);
 
     var qua = Quarantine.parse(channel.quarantine);
 
@@ -325,7 +316,7 @@ fun settleConditionals(channel: Channel, msg: slice) {
     var signature: slice = msg.loadBits(512);
     assert(isSignatureValid(msg.hash(), signature, fromA ? channel.keyA : channel.keyB)) throw ERROR_NOT_AUTHORIZED;
 
-    channel.verifyMessageType(mutate msg, TAG_SETTLE_CONDITIONALS);
+    msg.verifyMessageType(TAG_SETTLE_CONDITIONALS, channel.id);
 
     var conditionalsToSettle: dict = msg.loadDict();
     var conditionalsProof: cell = msg.loadRef();
@@ -373,31 +364,31 @@ fun settleConditionals(channel: Channel, msg: slice) {
 }
 
 @inline_ref
-fun finishUncooperativeClose(channel: Channel) {
-    assert(channel.quarantine != null) throw ERROR_NO_QUARANTINED_STATE;
+fun Channel.finishUncooperativeClose(mutate self) {
+    assert(self.quarantine != null) throw ERROR_NO_QUARANTINED_STATE;
 
-    var qua = Quarantine.parse(channel.quarantine);
+    var qua = Quarantine.parse(self.quarantine);
 
     assert(qua.startedAt +
-        channel.closureConfig.quarantineDuration +
-        channel.closureConfig.closeDuration < blockchain.now()) throw ERROR_TOO_EARLY_TO_CLOSE;
+        self.closureConfig.quarantineDuration +
+        self.closureConfig.closeDuration < blockchain.now()) throw ERROR_TOO_EARLY_TO_CLOSE;
 
-    channel.balance.sentB += qua.stateB.sent;
-    channel.balance.sentA += qua.stateA.sent;
+    self.balance.sentB = qua.stateB.sent;
+    self.balance.sentA = qua.stateA.sent;
 
-    var balanceB = channel.balance.calcB();
-    var balanceA = channel.balance.calcA();
+    var balanceB = self.balance.calcB();
+    var balanceA = self.balance.calcA();
 
     if (balanceB < 0) {
-        channel.balance.sentA -= balanceB;
+        self.balance.sentA -= balanceB;
     }
     if (balanceA < 0) {
-        channel.balance.sentB -= balanceA;
+        self.balance.sentB -= balanceA;
     }
 
-    channel.commitedSeqnoA = qua.stateA.seqno + 1;
-    channel.commitedSeqnoB = qua.stateB.seqno + 1;
-    closeChannel(channel);
+    self.commitedSeqnoA = qua.stateA.seqno + 1;
+    self.commitedSeqnoB = qua.stateB.seqno + 1;
+    self.closeChannel();
 }
 
 fun onInternalMessage(_: int, amount: int, inMsgFull: cell, inMsg: slice) {
@@ -423,11 +414,10 @@ fun onInternalMessage(_: int, amount: int, inMsgFull: cell, inMsg: slice) {
             assert(ok) throw ERROR_INVALID_EC_ID;
 
             var ecAmount: int = v!.loadVarUInt32();
-            topUpBalance(channel,ecAmount, inMsg);
+            channel.topUpBalance(ecAmount, inMsg);
         } else {
             assert(amount >= FEE_TON_ACCEPT) throw ERROR_AMOUNT_NOT_COVERS_FEE;
-
-            topUpBalance(channel, amount - FEE_TON_ACCEPT, inMsg);
+            channel.topUpBalance(amount - FEE_TON_ACCEPT, inMsg);
         }
     } else if (op == OP_JETTON_TRANSFER_NOTIFICATION) {
         // return because custom excess handled inside
@@ -436,12 +426,12 @@ fun onInternalMessage(_: int, amount: int, inMsgFull: cell, inMsg: slice) {
         // no excess
         return assignJettonWallet(channel, sender, inMsg);
     } else if (op == OP_COOPERATIVE_COMMIT) {
-        cooperativeCommit(channel, inMsg);
+        channel.cooperativeCommit(inMsg);
     } else if (op == OP_INIT_CHANNEL) {
         initChannel(channel, inMsg);
     } else if (op == OP_COOPERATIVE_CLOSE) {
         // excess hadled in channelClose()
-        return cooperativeClose(channel, inMsg);
+        return channel.cooperativeClose(inMsg);
     } else if (op == OP_START_UNCOOPERATIVE_CLOSE) {
         startUncooperativeClose(channel, inMsg);
     } else if (op == OP_CHALLENGE_QUARANTINEED_STATE) {
@@ -450,7 +440,7 @@ fun onInternalMessage(_: int, amount: int, inMsgFull: cell, inMsg: slice) {
         settleConditionals(channel, inMsg);
     } else if (op == OP_FINISH_UNCOOPERATIVE_CLOSE) {
         // excess hadled in channelClose()
-        return finishUncooperativeClose(channel);
+        return channel.finishUncooperativeClose();
     } else {
         throw 0xffff;
     }
@@ -481,7 +471,7 @@ fun acceptJettons(channel: Channel, sender: slice, tonAmount: int, payload: slic
     try {
         var innerOp: int = forwardPayload.loadInt(32);
         if (innerOp == OP_TOP_UP_BALANCE) {
-            topUpBalance(channel, jettonAmount, forwardPayload);
+            channel.topUpBalance(jettonAmount, forwardPayload);
             return sendExcess(channel,jettonSender);
         }
         throw 0xffff;
@@ -526,7 +516,7 @@ fun sendExcess(channel: Channel, dest: slice) {
     if (channel.paymentConfig.currencyType == CURRENCY_TYPE_TON) {
         reserve += channel.balance.calcA() + channel.balance.calcB();
     }
-    reserveToncoinsOnBalance(reserve, 0);
+    reserveToncoinsOnBalance(reserve, RESERVE_MODE_AT_MOST);
 
    sendMessage(
         beginCell()
@@ -560,21 +550,26 @@ fun assignJettonWallet(channel: Channel, sender: slice, payload: slice) {
 }
 
 @inline
-fun Channel.verifyStates(self, a: Semichannel, b: Semichannel): void {
-    assert((a.data.seqno >= self.commitedSeqnoA) &
-        (b.data.seqno >= self.commitedSeqnoB) &
+fun verifyStates(commitedSeqnoA: int, commitedSeqnoB: int, a: Semichannel, b: Semichannel): void {
+    assert((a.data.seqno >= commitedSeqnoA) &
+        (b.data.seqno >= commitedSeqnoB) &
         (b.data.seqno >= a.counterpartyData.seqno) &
         (a.data.seqno >= b.counterpartyData.seqno) &
-        (b.data.seqno >= a.counterpartyData.sent) &
-        (a.data.sent >= b.counterpartyData.sent) &
-        (a.counterpartyData.seqno >= self.commitedSeqnoB) &
-        (b.counterpartyData.seqno >= self.commitedSeqnoA)) throw ERROR_OUTDATED_STATE;
+        (b.data.sent >= a.counterpartyData.sent) &
+        (a.data.sent >= b.counterpartyData.sent)) throw ERROR_OUTDATED_STATE;
+
+        if(a.counterpartyData.seqno > 0) {
+            assert(a.counterpartyData.seqno >= commitedSeqnoB) throw ERROR_OUTDATED_STATE;
+        }
+        if(b.counterpartyData.seqno > 0) {
+            assert(b.counterpartyData.seqno >= commitedSeqnoA) throw ERROR_OUTDATED_STATE;
+        }
 }
 
 @inline_ref
-fun Channel.verifyMessageType(self, mutate msg: slice, tag: uint32): void {
-    assert(msg.loadUint(32) == tag) throw ERROR_WRONG_TAG;
-    assert(self.id == msg.loadUint(128)) throw ERROR_WRONG_CHANNEL_ID;
+fun slice.verifyMessageType(mutate self, tag: uint32, id: int): void {
+    assert(self.loadUint(32) == tag) throw ERROR_WRONG_TAG;
+    assert(id == self.loadUint(128)) throw ERROR_WRONG_CHANNEL_ID;
 }
 
 @inline
