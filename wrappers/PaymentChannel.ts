@@ -218,7 +218,7 @@ function closureConfigToCell(config: ClosureConfig) {
             .storeUint(config.closeDuration, 32)
            .endCell();
 }
-function balnceToCell(balance: Balance) {
+export function balanceToCell(balance: Balance) {
     return beginCell()
             .storeCoins(balance.depositA)
             .storeCoins(balance.depositB)
@@ -230,7 +230,7 @@ function balnceToCell(balance: Balance) {
 }
 
 function emptyBalanceCell() {
-    return balnceToCell({
+    return balanceToCell({
         depositA: 0n,
         depositB: 0n,
         withdrawA: 0n,

@@ -1,6 +1,6 @@
 import { Blockchain, BlockchainSnapshot, SandboxContract, TreasuryContract } from '@ton/sandbox';
-import { beginCell, Cell, Dictionary, generateMerkleProof, Slice, toNano } from '@ton/core';
-import { BalanceCommit, CloseState, mapState, PaymentChannel, PaymentChannelConfig, SemiChannel, SemiChannelBody, signSemiChannel } from '../wrappers/PaymentChannel';
+import { beginCell, Cell, contractAddress, Dictionary, generateMerkleProof, Slice, toNano } from '@ton/core';
+import { Balance, BalanceCommit, balanceToCell, CloseState, mapState, PaymentChannel, PaymentChannelConfig, paymentChannelConfigToCell, SemiChannel, SemiChannelBody, signSemiChannel } from '../wrappers/PaymentChannel';
 import '@ton/test-utils';
 import { compile } from '@ton/blueprint';
 import { KeyPair, getSecureRandomBytes, keyPairFromSeed } from '@ton/crypto';
@@ -32,6 +32,7 @@ describe('PaymentChannel', () => {
     let keysB: KeyPair
 
     let depoFee = toNano('0.03');
+    let feeMinBalance = toNano('0.01');
 
     let calcSends = (data: ChannelData) => {
         let sentA = data.balance.balanceA - (data.balance.depositA - data.balance.withdrawA);
@@ -108,6 +109,154 @@ describe('PaymentChannel', () => {
         };
 
         tonChannel = blockchain.openContract(PaymentChannel.createFromConfig(tonChannelConfig, channelCode));
+
+    });
+
+    it('should not allow to deploy with value below min storage fee', async () => {
+        const prevState = blockchain.snapshot();
+        const msgValue = tonChannelConfig.paymentConfig.storageFee - 1n;
+        let deployRes = await tonChannel.sendDeploy(walletA.getSender(), true, keysA.secretKey, msgValue);
+
+        expect(deployRes.transactions).toHaveTransaction({
+            on: tonChannel.address,
+            value: msgValue,
+            aborted: true,
+            deploy: true,
+            exitCode: Errors.ERROR_NOT_ENOUGH_MONEY_FOR_INIT_STORAGE
+        });
+
+        expect(await tonChannel.getChannelState()).toEqual("uninited");
+
+        deployRes = await tonChannel.sendDeploy(walletA.getSender(), true, keysA.secretKey, msgValue + 1n);
+        expect(deployRes.transactions).toHaveTransaction({
+            on: tonChannel.address,
+            value: msgValue + 1n,
+            aborted: false,
+        });
+
+        expect(await tonChannel.getChannelState()).toEqual("open");
+
+        await blockchain.loadFrom(prevState);
+    });
+
+    it('should not allow to deploy with configured storage fee <= hardcoded minimum', async () => {
+        const prevState = blockchain.snapshot();
+        let newConfig: PaymentChannelConfig = {...tonChannelConfig, paymentConfig: {...tonChannelConfig.paymentConfig, storageFee: feeMinBalance}};
+
+        let newChannel = blockchain.openContract(
+            PaymentChannel.createFromConfig(newConfig, channelCode)
+        );
+        const msgValue = feeMinBalance;
+        let deployRes = await newChannel.sendDeploy(walletA.getSender(), true, keysA.secretKey, msgValue);
+
+        expect(deployRes.transactions).toHaveTransaction({
+            on: newChannel.address,
+            value: msgValue,
+            aborted: true,
+            deploy: true,
+            exitCode: Errors.ERROR_NOT_ENOUGH_MONEY_FOR_INIT_STORAGE
+        });
+
+        expect(await newChannel.getChannelState()).toEqual("uninited");
+
+        deployRes = await newChannel.sendDeploy(walletA.getSender(), true, keysA.secretKey, msgValue + 1n);
+        expect(deployRes.transactions).toHaveTransaction({
+            on: newChannel.address,
+            value: msgValue + 1n,
+            aborted: true,
+            exitCode: Errors.ERROR_NOT_ENOUGH_MONEY_FOR_INIT_STORAGE
+        });
+
+        // Gotta increase config min balance above absolute minimum
+        newConfig.paymentConfig = {...newConfig.paymentConfig, storageFee: feeMinBalance + 1n};
+        newChannel = blockchain.openContract(
+            PaymentChannel.createFromConfig(newConfig, channelCode)
+        );
+
+        deployRes = await newChannel.sendDeploy(walletA.getSender(), true, keysA.secretKey, msgValue + 1n);
+        expect(deployRes.transactions).toHaveTransaction({
+            on: newChannel.address,
+            value: msgValue + 1n,
+            aborted: false
+        });
+
+        expect(await newChannel.getChannelState()).toEqual("open");
+
+        await blockchain.loadFrom(prevState);
+    });
+
+    it('should not be able to deploy channel with non-empty balance', async () => {
+        const prevState = blockchain.snapshot();
+
+        const initialConfig = paymentChannelConfigToCell(tonChannelConfig);
+
+        const emptyBalance: Balance = {
+            depositA: 0n,
+            depositB: 0n,
+            withdrawA: 0n,
+            withdrawB: 0n,
+            sentA: 0n,
+            sentB: 0n
+        };
+
+        const rndVal = BigInt(getRandomInt(1, 1000)) * toNano('0.001');
+
+        const withDepositA  = {...emptyBalance, depositA: rndVal};
+        const withDepositB  = {...emptyBalance, depositB: rndVal};
+        const withWithdrawA = {...emptyBalance, withdrawA: rndVal};
+        const withWithdrawB = {...emptyBalance, withdrawB: rndVal};
+        const withSentA = {...emptyBalance, sentA: rndVal};
+        const withSentB = {...emptyBalance, sentB: rndVal};
+
+        const withAll: Balance = {
+            depositA: rndVal,
+            depositB: rndVal,
+            withdrawA: rndVal,
+            withdrawB: rndVal,
+            sentA: rndVal,
+            sentB: rndVal
+        };
+
+        let testCases = [
+            withDepositA,
+            withDepositB,
+            withWithdrawA,
+            withWithdrawB,
+            withSentA,
+            withSentB,
+            withAll
+        ];
+
+        for(let testCase of testCases) {
+            const balanceCell = balanceToCell(testCase);
+            const newRefs = [balanceCell, ...initialConfig.refs.slice(1)];
+
+            const newConfig = new Cell({bits: initialConfig.bits, refs: newRefs});
+            const initMsg   = PaymentChannel.channelInitMessage(true, keysA.secretKey, tonChannelConfig.id);
+
+            const newChannelAddr = contractAddress(0, {
+                data: newConfig,
+                code: channelCode
+            });
+
+            const res = await walletA.send({
+                to: newChannelAddr,
+                value: toNano('1'),
+                body: initMsg,
+                init: {
+                    data: newConfig,
+                    code: channelCode
+                }
+            });
+
+            expect(res.transactions).toHaveTransaction({
+                on: newChannelAddr,
+                aborted: true,
+                exitCode: Errors.ERROR_INCORRECT_INITIAL_BALANCE
+            });
+        }
+
+        await blockchain.loadFrom(prevState);
     });
 
     it('should deploy', async () => {
@@ -191,6 +340,26 @@ describe('PaymentChannel', () => {
         expect(dataAfter.balance.balanceB).toEqual(dataBefore.balance.balanceB + depoAmount - depoFee);
 
         expect(smc.balance).toEqual(tonChannelConfig.paymentConfig.storageFee + dataAfter.balance.depositA + dataAfter.balance.depositB);
+    });
+
+    it('should not be able to re-deploy', async () => {
+            const initMsg   = PaymentChannel.channelInitMessage(true, keysA.secretKey, tonChannelConfig.id);
+
+            const res = await walletA.send({
+                to: tonChannel.address,
+                value: toNano('1'),
+                body: initMsg,
+                init: {
+                    data: paymentChannelConfigToCell(tonChannelConfig),
+                    code: channelCode
+                }
+            });
+
+            expect(res.transactions).toHaveTransaction({
+                on: tonChannel.address,
+                aborted: true,
+                exitCode: Errors.ERROR_ALREADY_INITED
+            });
     });
     it('should reject top up below minimal fee', async () => {
         let depoAmount = depoFee - 1n;
