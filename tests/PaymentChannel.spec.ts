@@ -264,13 +264,12 @@ describe('PaymentChannel', () => {
 
         // Meh
         if(sentA > sentB) {
-            sentB = 0n;
             sentA -= sentB;
+            sentB = 0n;
         } else {
+            sentB -= sentA;
             sentA = 0n;
-            sentB -= sentB;
         }
-
 
         const noWithdraw: BalanceCommit = {
             // Same withdraw
