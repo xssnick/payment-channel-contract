@@ -1361,6 +1361,67 @@ describe('PaymentChannel', () => {
         }
         await blockchain.loadFrom(prevState);
     });
+    it('should not allow to settle conditionals before quarantine end', async () => {
+        let toSettle = Dictionary.empty(Dictionary.Keys.Uint(32), Dictionary.Values.BigUint(32));
+        for(let testState of [quarantineStartedA, quarantineStartedB]) {
+            for(let testWallet of [walletA, walletB]) {
+                await blockchain.loadFrom(testState);
+                const stateBefore = await tonChannel.getChannelData();
+                const conditionalDeadline = stateBefore.quarantine!.startedAt + tonChannelConfig.closureConfig.quarantineDuration;
+                // console.log("Before:", stateBefore.quarantine);
+                expect(stateBefore.quarantine).not.toBeNull();
+
+                toSettle.set(0, BigInt(conditionalDeadline));
+                blockchain.now = conditionalDeadline;
+                const isA = testWallet === walletA;
+
+                const res = await tonChannel.sendSettleConditionals(testWallet.getSender(), {
+                    isA,
+                    toSettle,
+                    proof: conditionalsProof,
+                    key: isA ? keysA.secretKey : keysB.secretKey
+                });
+
+                expect(res.transactions).toHaveTransaction({
+                    on: tonChannel.address,
+                    op: Op.OP_SETTLE_CONDITIONALS,
+                    aborted: true,
+                    exitCode: Errors.ERROR_QUARANTINE_NOT_FINISHED
+                });
+            }
+        }
+    });
+    it('should not allow to settle conditionals once closure duration expired', async () => {
+        let toSettle = Dictionary.empty(Dictionary.Keys.Uint(32), Dictionary.Values.BigUint(32));
+        for(let testState of [quarantineStartedA, quarantineStartedB]) {
+            for(let testWallet of [walletA, walletB]) {
+                await blockchain.loadFrom(testState);
+                const stateBefore = await tonChannel.getChannelData();
+                const conditionalDeadline = stateBefore.quarantine!.startedAt + tonChannelConfig.closureConfig.quarantineDuration + tonChannelConfig.closureConfig.closeDuration;
+                // console.log("Before:", stateBefore.quarantine);
+                expect(stateBefore.quarantine).not.toBeNull();
+
+                toSettle.set(0, BigInt(conditionalDeadline));
+                blockchain.now = conditionalDeadline;
+                const isA = testWallet === walletA;
+
+                const res = await tonChannel.sendSettleConditionals(testWallet.getSender(), {
+                    isA,
+                    toSettle,
+                    proof: conditionalsProof,
+                    key: isA ? keysA.secretKey : keysB.secretKey
+                });
+
+                expect(res.transactions).toHaveTransaction({
+                    on: tonChannel.address,
+                    op: Op.OP_SETTLE_CONDITIONALS,
+                    aborted: true,
+                    exitCode: Errors.ERROR_TOO_LATE_TO_SETTLE_CONDITIONALS
+                });
+            }
+        }
+
+    });
     it('should be able to settle conditionals after quarantine end', async () => {
         // For simplicity we use single conditional for both sides
         // Which practically doesn't make much sense
@@ -1406,5 +1467,47 @@ describe('PaymentChannel', () => {
         }
 
         await blockchain.loadFrom(prevState);
+    });
+    it('should properly check for conditionals proof', async () => {
+        let toSettle = Dictionary.empty(Dictionary.Keys.Uint(32), Dictionary.Values.BigUint(32));
+        let newConditionals   = Dictionary.empty(Dictionary.Keys.BigUint(32), CodeSegmentSlice());
+        const testVal = beginCell().storeStringRefTail("Hop hey!").endCell().beginParse();
+        newConditionals.set(0n, conditionals.get(0n)!);
+        newConditionals.set(42n, testVal);
+
+        const newProof = newConditionals.generateMerkleProof(newConditionals.keys());
+        const testUpdate = conditionals.generateMerkleUpdate(0n, testVal);
+        const mockProof = beginCell().storeUint(3, 8).storeBuffer(conditionalsHash, 32).storeRef(beginCell().storeDictDirect(newConditionals).endCell()).endCell();
+
+        for(let testState of [quarantineStartedA, quarantineStartedB]) {
+            for(let testWallet of [walletA, walletB]) {
+                await blockchain.loadFrom(testState);
+                for(let testProof of [newProof, testUpdate, mockProof]) {
+                    const stateBefore = await tonChannel.getChannelData();
+                    // console.log("Before:", stateBefore.quarantine);
+                    expect(stateBefore.quarantine).not.toBeNull();
+                    const conditionalDeadline = stateBefore.quarantine!.startedAt + tonChannelConfig.closureConfig.quarantineDuration + 1337;
+
+                    toSettle.set(0, BigInt(conditionalDeadline));
+                    blockchain.now = conditionalDeadline + 1;
+                    const isA = testWallet === walletA;
+
+                    const res = await tonChannel.sendSettleConditionals(testWallet.getSender(), {
+                        isA,
+                        toSettle,
+                        proof: testProof,
+                        key: isA ? keysA.secretKey : keysB.secretKey
+                    });
+
+                    expect(res.transactions).toHaveTransaction({
+                        on: tonChannel.address,
+                        op: Op.OP_SETTLE_CONDITIONALS,
+                        aborted: true,
+                        exitCode: Errors.ERROR_INCORRECT_CONDITIONALS_PROOF
+                    });
+                }
+            }
+        }
+
     });
 });
