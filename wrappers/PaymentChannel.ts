@@ -411,6 +411,37 @@ export class PaymentChannel implements Contract {
 
     }
 
+    static challengeQuarantineMessage(isA: boolean, signedStateA: Cell, signedStateB: Cell, key: Buffer, channelId: bigint) {
+        const msgBody = beginCell()
+                        .storeUint(Tags.TAG_CHALLENGE_QUARANTINEED_STATE, 32)
+                        .storeUint(channelId, 128)
+                        .storeRef(signedStateA)
+                        .storeRef(signedStateB)
+                       .endCell();
+
+        return beginCell().storeUint(Op.OP_CHALLENGE_QUARANTINEED_STATE, 32)
+                          .storeBit(isA)
+                          .storeBuffer(sign(msgBody.hash(), key))
+                          .storeSlice(msgBody.asSlice())
+               .endCell();
+
+    }
+
+    async sendChallengeQuarantine(provider: ContractProvider, via: Sender, opts: {isA: boolean, stateA: Cell, stateB: Cell, key: Buffer}, channelId?: bigint, value: bigint = toNano('0.05')) {
+        const curId = channelId ?? this.channelId;
+
+        if(!curId) {
+            throw new Error("Channel id is required");
+        }
+
+        await provider.internal(via, {
+            value,
+            sendMode: SendMode.PAY_GAS_SEPARATELY,
+            body: PaymentChannel.challengeQuarantineMessage(opts.isA, opts.stateA, opts.stateB, opts.key, curId)
+        });
+
+    }
+
     static finishUncoopCloseMessage() {
         return beginCell().storeUint(Op.OP_FINISH_UNCOOPERATIVE_CLOSE, 32).endCell();
     }
