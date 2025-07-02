@@ -704,7 +704,7 @@ describe('PaymentChannel', () => {
             }
         }
     });
-    it('should not accept uncooperative commit signed body for cooperative close', async () => {
+    it('should not accept cooperative commit signed body for cooperative close', async () => {
         // Since coop commit message is exdended coop close message
         // coop commit can be successfully parsed as commit close
         // Thus we expect tag to be checked
