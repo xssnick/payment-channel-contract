@@ -405,11 +405,11 @@ describe('PaymentChannel', () => {
         let sentB = dataBefore.balance.depositB / BigInt(getRandomInt(10, 100));
 
         if(sentA > sentB) {
-            sentB = 0n;
             sentA -= sentB;
+            sentB = 0n;
         } else {
+            sentB -= sentA;
             sentA = 0n;
-            sentB -= sentB;
         }
 
         const sendsBefore = calcSends(dataBefore);
