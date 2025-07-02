@@ -742,10 +742,10 @@ describe('PaymentChannel', () => {
         const origId = tonChannelConfig.id;
 
         const oneBelow = origId - 1n
-        const rndBelow = origId - BigInt(getRandomInt(2, Number(origId)));
+        const rndBelow = origId - BigInt(getRandomInt(2, Number(origId - 1n)));
 
         const oneAbove = origId + 1n
-        const rndAbove = origId - BigInt(getRandomInt(2, Number(origId)));
+        const rndAbove = origId + BigInt(getRandomInt(2, Number(origId)));
 
         const closeState: CloseState = {
             seqnoA: dataBefore.seqnoA,
