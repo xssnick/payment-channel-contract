@@ -6,7 +6,7 @@ import { compile } from '@ton/blueprint';
 import { KeyPair, getSecureRandomBytes, keyPairFromSeed } from '@ton/crypto';
 import { CodeSegmentSlice, getRandomInt, loadCodeDictionary, signCell } from './utils';
 import { Errors, Op } from '../wrappers/Constants';
-import { getMsgPrices } from './gasUtils';
+import { getMsgPrices, computedGeneric } from './gasUtils';
 import { findTransaction, findTransactionRequired } from '@ton/test-utils';
 
 type ChannelData = Awaited<ReturnType<SandboxContract<PaymentChannel>['getChannelData']>>;
@@ -27,6 +27,9 @@ describe('PaymentChannel', () => {
 
     let quarantineStartedA: BlockchainSnapshot;
     let quarantineStartedB: BlockchainSnapshot;
+
+    let quarantineChallengedA: BlockchainSnapshot;
+    let quarantineChallengedB: BlockchainSnapshot;
 
     let keysA: KeyPair
     let keysB: KeyPair
@@ -1299,6 +1302,779 @@ describe('PaymentChannel', () => {
             await blockchain.loadFrom(prevState);
         }
     });
+    it('should be able to challenge quarantine', async () => {
+        const prevState   = blockchain.snapshot();
+
+        try {
+            for(let testState of [quarantineStartedA, quarantineStartedB]) {
+                await blockchain.loadFrom(testState);
+
+                const dataBefore = await tonChannel.getChannelData();
+
+                expect(dataBefore.quarantine).not.toBeNull();
+                const quarantineBefore = dataBefore.quarantine!;
+
+                const prevA: SemiChannel = {
+                    channelId: tonChannelConfig.id,
+                    data: quarantineBefore.stateA
+                };
+                const prevB: SemiChannel = {
+                    channelId: tonChannelConfig.id,
+                    data: quarantineBefore.stateB
+                };
+
+                const aNextSeqno: SemiChannel = {
+                    channelId: tonChannelConfig.id,
+                    data: {...quarantineBefore.stateA, seqno: quarantineBefore.stateA.seqno + BigInt(getRandomInt(1, 100))},
+                };
+                const aMoreSent: SemiChannel  = {
+                    channelId: tonChannelConfig.id,
+                    data: {...quarantineBefore.stateA, sent: quarantineBefore.stateA.sent + BigInt(getRandomInt(1, 100))},
+                };
+
+                const bNextSeqno: SemiChannel = {
+                    channelId: tonChannelConfig.id,
+                    data: {...quarantineBefore.stateB, seqno: quarantineBefore.stateB.seqno + BigInt(getRandomInt(1, 100))}
+                };
+                const bMoreSent : SemiChannel = {
+                    channelId: tonChannelConfig.id,
+                    data: {...quarantineBefore.stateB, sent: quarantineBefore.stateB.sent + BigInt(getRandomInt(1, 100))},
+                };
+
+                // I'm aware there are more permutations
+                let setA = [[aNextSeqno, prevB], [aMoreSent, prevB], [aNextSeqno, bNextSeqno]];
+                let setB = [[prevA, bNextSeqno], [prevB, bMoreSent], [aNextSeqno, bNextSeqno]];
+
+                const isA = testState === quarantineStartedB;
+
+                let testSet: SemiChannel[][];
+                let testWallet: SandboxContract<TreasuryContract>;
+                let signKey: Buffer;
+
+                if(isA) {
+                    // A challenges B state
+                    testSet = setB;
+                    testWallet = walletA;
+                    signKey = keysA.secretKey;
+                } else {
+                    // B challenges A state
+                    testSet = setA;
+                    testWallet = walletB;
+                    signKey = keysB.secretKey;
+                }
+
+                for(let testCase of testSet) {
+                    const stateA = signSemiChannel(testCase[0], keysA.secretKey);
+                    const stateB = signSemiChannel(testCase[1], keysB.secretKey);
+
+                    const res = await tonChannel.sendChallengeQuarantine(testWallet.getSender(), {
+                        isA,
+                        stateA,
+                        stateB,
+                        key: signKey
+                    });
+
+                    expect(res.transactions).toHaveTransaction({
+                        on: tonChannel.address,
+                        from: testWallet.address,
+                        op: Op.OP_CHALLENGE_QUARANTINEED_STATE,
+                        aborted: false
+                    });
+
+                    const dataAfter = await tonChannel.getChannelData();
+                    expect(dataAfter.quarantine).not.toBeNull();
+                    expect(dataAfter.quarantine!.challenged).toBe(true);
+
+                    if(isA) {
+                        expect(dataAfter.quarantine!.stateB).toEqual({...testCase[1].data, sent: testCase[1].data.sent + tonChannelConfig.closureConfig.fine});
+                        expect(dataAfter.quarantine!.stateA).toEqual(quarantineBefore.stateA);
+                        quarantineChallengedA = blockchain.snapshot();
+                    } else {
+                        expect(dataAfter.quarantine!.stateA).toEqual({...testCase[0].data, sent: testCase[0].data.sent + tonChannelConfig.closureConfig.fine});
+                        expect(dataAfter.quarantine!.stateB).toEqual(quarantineBefore.stateB);
+                        quarantineChallengedB = blockchain.snapshot();
+                    }
+
+                    await blockchain.loadFrom(testState);
+                }
+            }
+        } finally {
+            await blockchain.loadFrom(prevState);
+        }
+    });
+    it('only counterparty should be able to challenge quarantine', async () => {
+        const prevState = blockchain.snapshot();
+
+        for(let testState of [quarantineStartedA, quarantineStartedB]) {
+            await blockchain.loadFrom(testState);
+            const dataBefore = await tonChannel.getChannelData();
+
+            expect(dataBefore.quarantine).not.toBeNull();
+            const quarantineBefore = dataBefore.quarantine!;
+
+            const prevA: SemiChannel = {
+                channelId: tonChannelConfig.id,
+                data: quarantineBefore.stateA
+            };
+            const prevB: SemiChannel = {
+                channelId: tonChannelConfig.id,
+                data: quarantineBefore.stateB
+            };
+
+            const aNextSeqno: SemiChannel = {
+                channelId: tonChannelConfig.id,
+                data: {...quarantineBefore.stateA, seqno: quarantineBefore.stateA.seqno + BigInt(getRandomInt(1, 100))},
+            };
+            const bNextSeqno: SemiChannel = {
+                channelId: tonChannelConfig.id,
+                data: {...quarantineBefore.stateB, seqno: quarantineBefore.stateB.seqno + BigInt(getRandomInt(1, 100))}
+            };
+
+            // Opposite of what would be correct
+            const isA = testState === quarantineStartedA;
+
+            let testCase: {
+                stateA: Cell,
+                stateB: Cell
+            };
+            let testWallet: SandboxContract<TreasuryContract>;
+            let signKey: Buffer;
+
+            if(isA) {
+                testCase = {
+                    stateA: signSemiChannel(prevA, keysA.secretKey),
+                    stateB: signSemiChannel(bNextSeqno, keysB.secretKey)
+                };
+                testWallet = walletA;
+                signKey = keysA.secretKey;
+            } else {
+                testCase = {
+                    stateA: signSemiChannel(aNextSeqno, keysA.secretKey),
+                    stateB: signSemiChannel(prevB, keysB.secretKey)
+                };
+
+                testWallet = walletB;
+                signKey = keysB.secretKey;
+            }
+
+            const res = await tonChannel.sendChallengeQuarantine(testWallet.getSender(), {
+                isA,
+                stateA: testCase.stateA,
+                stateB: testCase.stateB,
+                key: signKey,
+            });
+
+            expect(res.transactions).toHaveTransaction({
+                on: tonChannel.address,
+                from: testWallet.address,
+                op: Op.OP_CHALLENGE_QUARANTINEED_STATE,
+                aborted: true,
+                exitCode: Errors.ERROR_UNAUTHORIZED_CHALLENGE
+            });
+        }
+
+        await blockchain.loadFrom(prevState);
+    });
+    it('should check message signature for quarantine challenge', async () => {
+        const prevState = blockchain.snapshot();
+
+        for(let testState of [quarantineStartedA, quarantineStartedB]) {
+            await blockchain.loadFrom(testState);
+            const dataBefore = await tonChannel.getChannelData();
+
+            expect(dataBefore.quarantine).not.toBeNull();
+            const quarantineBefore = dataBefore.quarantine!;
+
+            const prevA: SemiChannel = {
+                channelId: tonChannelConfig.id,
+                data: quarantineBefore.stateA
+            };
+            const prevB: SemiChannel = {
+                channelId: tonChannelConfig.id,
+                data: quarantineBefore.stateB
+            };
+
+            const aNextSeqno: SemiChannel = {
+                channelId: tonChannelConfig.id,
+                data: {...quarantineBefore.stateA, seqno: quarantineBefore.stateA.seqno + BigInt(getRandomInt(1, 100))},
+            };
+            const bNextSeqno: SemiChannel = {
+                channelId: tonChannelConfig.id,
+                data: {...quarantineBefore.stateB, seqno: quarantineBefore.stateB.seqno + BigInt(getRandomInt(1, 100))}
+            };
+
+            const isA = testState === quarantineStartedB;
+
+            let testCase: {
+                stateA: Cell,
+                stateB: Cell
+            };
+            let testWallet: SandboxContract<TreasuryContract>;
+            let signKey: Buffer;
+
+            if(isA) {
+                testCase = {
+                    stateA: signSemiChannel(prevA, keysA.secretKey),
+                    stateB: signSemiChannel(bNextSeqno, keysB.secretKey)
+                };
+                testWallet = walletA;
+                // Key B for A
+                signKey = keysB.secretKey;
+            } else {
+                testCase = {
+                    stateA: signSemiChannel(aNextSeqno, keysA.secretKey),
+                    stateB: signSemiChannel(prevB, keysB.secretKey)
+                };
+
+                testWallet = walletB;
+                // Key A for B
+                signKey = keysA.secretKey;
+            }
+
+            const res = await tonChannel.sendChallengeQuarantine(testWallet.getSender(), {
+                isA,
+                stateA: testCase.stateA,
+                stateB: testCase.stateB,
+                key: signKey,
+            });
+
+            expect(res.transactions).toHaveTransaction({
+                on: tonChannel.address,
+                from: testWallet.address,
+                op: Op.OP_CHALLENGE_QUARANTINEED_STATE,
+                aborted: true,
+                exitCode: Errors.ERROR_NOT_AUTHORIZED
+            });
+        }
+
+        await blockchain.loadFrom(prevState);
+    });
+    it('should check state signature for quarantine callenge', async () => {
+        const prevState = blockchain.snapshot();
+
+        for(let testState of [quarantineStartedA, quarantineStartedB]) {
+            await blockchain.loadFrom(testState);
+            const dataBefore = await tonChannel.getChannelData();
+
+            expect(dataBefore.quarantine).not.toBeNull();
+            const quarantineBefore = dataBefore.quarantine!;
+
+            const prevA: SemiChannel = {
+                channelId: tonChannelConfig.id,
+                data: quarantineBefore.stateA
+            };
+            const prevB: SemiChannel = {
+                channelId: tonChannelConfig.id,
+                data: quarantineBefore.stateB
+            };
+
+            const aNextSeqno: SemiChannel = {
+                channelId: tonChannelConfig.id,
+                data: {...quarantineBefore.stateA, seqno: quarantineBefore.stateA.seqno + BigInt(getRandomInt(1, 100))},
+            };
+            const bNextSeqno: SemiChannel = {
+                channelId: tonChannelConfig.id,
+                data: {...quarantineBefore.stateB, seqno: quarantineBefore.stateB.seqno + BigInt(getRandomInt(1, 100))}
+            };
+
+            const isA = testState === quarantineStartedB;
+
+            let testCase: {
+                stateA: Cell,
+                stateB: Cell
+            };
+            let testWallet: SandboxContract<TreasuryContract>;
+            let signKey: Buffer;
+
+            if(isA) {
+                testCase = {
+                    stateA: signSemiChannel(prevA, keysA.secretKey),
+                    // State B signed with key A
+                    stateB: signSemiChannel(bNextSeqno, keysA.secretKey)
+                };
+                testWallet = walletA;
+                signKey = keysA.secretKey;
+            } else {
+                testCase = {
+                    // State a signed with key B
+                    stateA: signSemiChannel(aNextSeqno, keysB.secretKey),
+                    stateB: signSemiChannel(prevB, keysB.secretKey)
+                };
+
+                testWallet = walletB;
+                signKey = keysB.secretKey;
+            }
+
+            const res = await tonChannel.sendChallengeQuarantine(testWallet.getSender(), {
+                isA,
+                stateA: testCase.stateA,
+                stateB: testCase.stateB,
+                key: signKey,
+            });
+
+            expect(res.transactions).toHaveTransaction({
+                on: tonChannel.address,
+                from: testWallet.address,
+                op: Op.OP_CHALLENGE_QUARANTINEED_STATE,
+                aborted: true,
+                exitCode: Errors.ERROR_NOT_AUTHORIZED
+            });
+        }
+
+        await blockchain.loadFrom(prevState);
+
+    });
+    it('should check for channelId for quarantine challenge', async () => {
+        const origId = tonChannelConfig.id;
+
+        const oneBelow = origId - 1n
+        const rndBelow = origId - BigInt(getRandomInt(2, Number(origId - 1n)));
+
+        const oneAbove = origId + 1n
+        const rndAbove = origId + BigInt(getRandomInt(2, Number(origId)));
+
+        const prevState = blockchain.snapshot();
+
+        for(let testState of [quarantineStartedA, quarantineStartedB]) {
+            await blockchain.loadFrom(testState);
+            const dataBefore = await tonChannel.getChannelData();
+
+            expect(dataBefore.quarantine).not.toBeNull();
+            const quarantineBefore = dataBefore.quarantine!;
+
+            const prevA = signSemiChannel({
+                channelId: tonChannelConfig.id,
+                data: quarantineBefore.stateA
+            }, keysA.secretKey);
+
+            const prevB = signSemiChannel({
+                channelId: tonChannelConfig.id,
+                data: quarantineBefore.stateB
+            }, keysB.secretKey);
+
+            const aNextSeqno: SemiChannel = {
+                channelId: tonChannelConfig.id,
+                data: {...quarantineBefore.stateA, seqno: quarantineBefore.stateA.seqno + BigInt(getRandomInt(1, 100))},
+            };
+            const bNextSeqno: SemiChannel = {
+                channelId: tonChannelConfig.id,
+                data: {...quarantineBefore.stateB, seqno: quarantineBefore.stateB.seqno + BigInt(getRandomInt(1, 100))}
+            };
+
+            const isA = testState === quarantineStartedB;
+
+            let testCases: {
+                stateA: Cell,
+                stateB: Cell,
+                channelId: bigint;
+            }[];           let testWallet: SandboxContract<TreasuryContract>;
+            let signKey: Buffer;
+
+            for(let testId of [oneBelow, oneAbove, rndAbove, rndBelow]) {
+                const invalidStateA = signSemiChannel({...aNextSeqno, channelId: testId}, keysA.secretKey);
+                const invalidStateB = signSemiChannel({...bNextSeqno, channelId: testId}, keysB.secretKey);
+
+                if(isA) {
+                    testCases = [
+                        // Correct challenge state, but invalid id
+                        {
+                            channelId: testId,
+                            stateA: prevA,
+                            stateB: signSemiChannel(bNextSeqno, keysB.secretKey)
+                        },
+                        // Oposite valid id in message, but invalid chanel id in state
+                        {
+                            channelId: origId,
+                            stateA: prevA,
+                            stateB: invalidStateB
+                        }
+                    ];
+                    testWallet = walletA;
+                    signKey = keysA.secretKey;
+                } else {
+                    testCases = [
+                        {
+                            channelId: testId,
+                            stateA: signSemiChannel(aNextSeqno, keysA.secretKey),
+                            stateB: prevB
+                        },
+                        {
+                            channelId: origId,
+                            stateA: invalidStateA,
+                            stateB: prevB
+                        }
+                    ];
+
+                    testWallet = walletB;
+                    signKey = keysB.secretKey;
+                }
+
+
+                for(let testCase of testCases) {
+                    const res = await tonChannel.sendChallengeQuarantine(testWallet.getSender(), {
+                        isA,
+                        stateA: testCase.stateA,
+                        stateB: testCase.stateB,
+                        key: signKey,
+                    }, testCase.channelId);
+
+                    expect(res.transactions).toHaveTransaction({
+                        on: tonChannel.address,
+                        from: testWallet.address,
+                        op: Op.OP_CHALLENGE_QUARANTINEED_STATE,
+                        aborted: true,
+                        exitCode: Errors.ERROR_WRONG_CHANNEL_ID
+                    });
+                }
+            }
+        }
+
+        await blockchain.loadFrom(prevState);
+    });
+    it('should reject startUncooperativeClose for challenge quarantine message', async () => {
+        const prevState = blockchain.snapshot();
+
+        for(let testState of [quarantineStartedA, quarantineStartedB]) {
+            await blockchain.loadFrom(testState);
+            const dataBefore = await tonChannel.getChannelData();
+
+            expect(dataBefore.quarantine).not.toBeNull();
+            const quarantineBefore = dataBefore.quarantine!;
+
+
+            const isA = testState == quarantineStartedB;
+            const testWallet = isA ? walletA : walletB;
+
+            const prevA = signSemiChannel({
+                channelId: tonChannelConfig.id,
+                data: quarantineBefore.stateA
+            }, keysA.secretKey);
+
+            const prevB = signSemiChannel({
+                channelId: tonChannelConfig.id,
+                data: quarantineBefore.stateB
+            }, keysB.secretKey);
+
+            const aNextSeqno = signSemiChannel({
+                channelId: tonChannelConfig.id,
+                data: {...quarantineBefore.stateA, seqno: quarantineBefore.stateA.seqno + BigInt(getRandomInt(1, 100))},
+            }, keysA.secretKey);
+            const bNextSeqno = signSemiChannel({
+                channelId: tonChannelConfig.id,
+                data: {...quarantineBefore.stateB, seqno: quarantineBefore.stateB.seqno + BigInt(getRandomInt(1, 100))}
+            }, keysB.secretKey);
+
+            let startUncoopMessage: Cell;
+
+            if(isA) {
+                startUncoopMessage = PaymentChannel.uncooperativeCloseMessage(isA, prevA, bNextSeqno, keysA.secretKey, tonChannelConfig.id);
+            } else {
+                startUncoopMessage = PaymentChannel.uncooperativeCloseMessage(isA, aNextSeqno, prevB, keysB.secretKey, tonChannelConfig.id);
+            }
+
+            // Now gotta switch the OP
+
+            const msgPayload = beginCell().storeUint(Op.OP_CHALLENGE_QUARANTINEED_STATE, 32)
+                                          .storeSlice(
+                                              startUncoopMessage.asSlice().skip(32)
+                                          ).endCell();
+            const res = await testWallet.send({
+                to: tonChannel.address,
+                body: msgPayload,
+                value: toNano('1'),
+            });
+
+            expect(res.transactions).toHaveTransaction({
+                on: tonChannel.address,
+                from: testWallet.address,
+                op: Op.OP_CHALLENGE_QUARANTINEED_STATE,
+                aborted: true,
+                exitCode: Errors.ERROR_WRONG_TAG
+            });
+        }
+        await blockchain.loadFrom(prevState);
+
+    });
+    it('should not accept outdated states for quarantine challenge', async () => {
+        const stateBefore = await tonChannel.getChannelData();
+        const {sentA, sentB} = calcSends(stateBefore);
+
+        expect(stateBefore.quarantine).toBeNull();
+
+        const stateBodyA: SemiChannelBody = {
+            sent: sentA,
+            seqno: stateBefore.seqnoA,
+            conditionalsHash
+        };
+
+        const stateBodyB: SemiChannelBody = {
+            sent: sentB,
+            seqno: stateBefore.seqnoB,
+            conditionalsHash
+        }
+
+        const stateB = signSemiChannel({
+            channelId: tonChannelConfig.id,
+            data: stateBodyB,
+            counterpartyData: stateBodyA
+        }, keysB.secretKey);
+
+
+        const stateA = signSemiChannel({
+            channelId: tonChannelConfig.id,
+            data: stateBodyA,
+            counterpartyData: stateBodyB
+        }, keysA.secretKey);
+
+
+        const invalidSeqnoA = signSemiChannel({
+            channelId: tonChannelConfig.id,
+            data: {...stateBodyA, seqno: stateBefore.seqnoA - 1n},
+            counterpartyData: stateBodyB
+        }, keysA.secretKey);
+
+        const invalidSeqnoB = signSemiChannel({
+            channelId: tonChannelConfig.id,
+            data: {...stateBodyB, seqno: stateBefore.seqnoB - 1n},
+            counterpartyData: stateBodyA
+        }, keysB.secretKey);
+
+        const invalidCounterpartySeqnoA = signSemiChannel({
+            channelId: tonChannelConfig.id,
+            data: {...stateBodyA, seqno: stateBefore.seqnoA - 1n},
+            counterpartyData: {...stateBodyB, seqno: stateBefore.seqnoB - 1n}
+        }, keysA.secretKey);
+
+        const invalidCounterpartySeqnoB = signSemiChannel({
+            channelId: tonChannelConfig.id,
+            data: stateBodyB,
+            counterpartyData: {...stateBodyA, seqno: stateBefore.seqnoA - 1n}
+        }, keysB.secretKey);
+
+
+        const counterpartySeqnoGreaterA = signSemiChannel({
+            channelId: tonChannelConfig.id,
+            data: stateBodyA,
+            counterpartyData: {...stateBodyB, seqno: stateBodyA.seqno + 1n}
+        }, keysA.secretKey);
+
+        const counterpartySeqnoGreaterB = signSemiChannel({
+            channelId: tonChannelConfig.id,
+            data: stateBodyB,
+            counterpartyData: {...stateBodyA, seqno: stateBodyB.seqno + 1n}
+        }, keysB.secretKey);
+
+        const counterpartySentGreaterA = signSemiChannel({
+            channelId: tonChannelConfig.id,
+            data: stateBodyA,
+            counterpartyData: {...stateBodyB, seqno: stateBodyA.sent + 1n}
+        }, keysA.secretKey);
+
+        const counterpartySentGreaterB = signSemiChannel({
+            channelId: tonChannelConfig.id,
+            data: stateBodyB,
+            counterpartyData: {...stateBodyA, seqno: stateBodyB.sent + 1n}
+        }, keysB.secretKey);
+
+
+        const testCases = [
+            invalidSeqnoA,
+            invalidSeqnoB,
+            invalidCounterpartySeqnoA,
+            invalidCounterpartySeqnoB,
+            counterpartySeqnoGreaterA,
+            counterpartySeqnoGreaterB,
+            counterpartySentGreaterA,
+            counterpartySentGreaterB,
+            counterpartySentGreaterA,
+            counterpartySentGreaterB
+        ];
+
+        for(let testState of [quarantineStartedA, quarantineStartedB]) {
+            let testWallet: SandboxContract<TreasuryContract>;
+            let key: Buffer;
+
+            await blockchain.loadFrom(testState);
+
+            const isA = testState === quarantineStartedB;
+
+            if(isA) {
+                testWallet = walletA;
+                key = keysA.secretKey;
+            } else {
+                testWallet = walletB;
+                key = keysB.secretKey;
+            }
+
+
+            let i = 0;
+            for(let testCase of testCases) {
+                let signedA: Cell;
+                let signedB: Cell;
+
+                if(i++ % 2 == 0) {
+                    signedA = testCase;
+                    signedB = stateB;
+                } else {
+                    signedA = stateA;
+                    signedB = testCase;
+                }
+                const res = await tonChannel.sendChallengeQuarantine(testWallet.getSender(), {
+                    isA,
+                    stateA: signedA,
+                    stateB: signedB,
+                    key
+                });
+
+                expect(res.transactions).toHaveTransaction({
+                    on: tonChannel.address,
+                    op: Op.OP_CHALLENGE_QUARANTINEED_STATE,
+                    aborted: true,
+                    exitCode: Errors.ERROR_OUTDATED_STATE
+                });
+            }
+        }
+    });
+    it('should reject challenge for already challenged quarantine', async () => {
+        for(let testState of [quarantineChallengedA, quarantineChallengedB]) {
+            await blockchain.loadFrom(testState);
+            const dataBefore = await tonChannel.getChannelData();
+            expect(dataBefore.quarantine).not.toBeNull();
+
+            const quarantineBefore = dataBefore.quarantine!;
+
+            let testWallet: SandboxContract<TreasuryContract>;
+            let key: Buffer;
+
+            const isA = quarantineBefore.committedbyA;
+
+            const prevA = signSemiChannel({
+                channelId: tonChannelConfig.id,
+                data: quarantineBefore.stateA
+            }, keysA.secretKey);
+
+            const prevB = signSemiChannel({
+                channelId: tonChannelConfig.id,
+                data: quarantineBefore.stateB
+            }, keysB.secretKey);
+
+            const aNextSeqno = signSemiChannel({
+                channelId: tonChannelConfig.id,
+                data: {...quarantineBefore.stateA, seqno: quarantineBefore.stateA.seqno + BigInt(getRandomInt(1, 100))},
+            }, keysA.secretKey);
+            const bNextSeqno = signSemiChannel({
+                channelId: tonChannelConfig.id,
+                data: {...quarantineBefore.stateB, seqno: quarantineBefore.stateB.seqno + BigInt(getRandomInt(1, 100))}
+            }, keysB.secretKey);
+
+
+            let testCase :{
+                stateA: Cell,
+                stateB: Cell
+            };
+            if(isA) {
+                testWallet = walletA;
+                key = keysA.secretKey;
+                testCase = {
+                    stateA: prevA,
+                    stateB: bNextSeqno
+                };
+            } else {
+                testWallet = walletB;
+                key = keysB.secretKey;
+                testCase = {
+                    stateA: aNextSeqno,
+                    stateB: prevB
+                };
+            }
+
+            const res = await tonChannel.sendChallengeQuarantine(testWallet.getSender(), {
+                isA,
+                stateA: testCase.stateA,
+                stateB: testCase.stateB,
+                key
+            });
+
+            expect(res.transactions).toHaveTransaction({
+                on: tonChannel.address,
+                from: testWallet.address,
+                op: Op.OP_CHALLENGE_QUARANTINEED_STATE,
+                aborted: true,
+                exitCode: Errors.ERROR_QUARANTINEE_ALREADY_CHALLENGED
+            });
+        }
+    });
+    it('should not be able to challenge quarantine after quarantine expiration', async () => {
+
+        for(let testState of [quarantineStartedA, quarantineStartedB]) {
+            await blockchain.loadFrom(testState);
+            const dataBefore = await tonChannel.getChannelData();
+            expect(dataBefore.quarantine).not.toBeNull();
+
+            const quarantineBefore = dataBefore.quarantine!;
+
+            let testWallet: SandboxContract<TreasuryContract>;
+            let key: Buffer;
+
+            blockchain.now = quarantineBefore.startedAt + tonChannelConfig.closureConfig.quarantineDuration + 1;
+            const isA = quarantineBefore.committedbyA;
+
+            const prevA = signSemiChannel({
+                channelId: tonChannelConfig.id,
+                data: quarantineBefore.stateA
+            }, keysA.secretKey);
+
+            const prevB = signSemiChannel({
+                channelId: tonChannelConfig.id,
+                data: quarantineBefore.stateB
+            }, keysB.secretKey);
+
+            const aNextSeqno = signSemiChannel({
+                channelId: tonChannelConfig.id,
+                data: {...quarantineBefore.stateA, seqno: quarantineBefore.stateA.seqno + BigInt(getRandomInt(1, 100))},
+            }, keysA.secretKey);
+            const bNextSeqno = signSemiChannel({
+                channelId: tonChannelConfig.id,
+                data: {...quarantineBefore.stateB, seqno: quarantineBefore.stateB.seqno + BigInt(getRandomInt(1, 100))}
+            }, keysB.secretKey);
+
+
+            let testCase :{
+                stateA: Cell,
+                stateB: Cell
+            };
+            if(isA) {
+                testWallet = walletA;
+                key = keysA.secretKey;
+                testCase = {
+                    stateA: prevA,
+                    stateB: bNextSeqno
+                };
+            } else {
+                testWallet = walletB;
+                key = keysB.secretKey;
+                testCase = {
+                    stateA: aNextSeqno,
+                    stateB: prevB
+                };
+            }
+
+            const res = await tonChannel.sendChallengeQuarantine(testWallet.getSender(), {
+                isA,
+                stateA: testCase.stateA,
+                stateB: testCase.stateB,
+                key
+            });
+
+            expect(res.transactions).toHaveTransaction({
+                on: tonChannel.address,
+                from: testWallet.address,
+                op: Op.OP_CHALLENGE_QUARANTINEED_STATE,
+                aborted: true,
+                exitCode: Errors.ERROR_TOO_LATE_FOR_QUARANTINE_CHALLENGE
+            });
+        }
+    });
 
     it('should not be able to close before quarantine expire + closeDuration', async () => {
         const prevState = blockchain.snapshot();
@@ -1359,6 +2135,66 @@ describe('PaymentChannel', () => {
             const dataAfter = await tonChannel.getChannelData();
             assertChannelClosed(dataAfter, stateBefore.seqnoA + 1n, stateBefore.seqnoB + 1n);
         }
+        await blockchain.loadFrom(prevState);
+    });
+    it('should be able to close quarantine with either side fined above balance value', async () => {
+        const prevState = blockchain.snapshot();
+
+        const msgValue  = toNano('0.05');
+
+        for(let testState of [quarantineChallengedA, quarantineChallengedB]) {
+            await blockchain.loadFrom(testState);
+            const stateBefore = await tonChannel.getChannelData();
+
+
+            expect(stateBefore.quarantine).not.toBeNull();
+            const quarantineBefore = stateBefore.quarantine!;
+
+            const isB = testState === quarantineChallengedB;
+
+            blockchain.now = quarantineBefore.startedAt + tonChannelConfig.closureConfig.quarantineDuration + tonChannelConfig.closureConfig.closeDuration + 1;
+            let contractBalance = (await blockchain.getContract(tonChannel.address)).balance + msgValue;
+
+            const res = await tonChannel.sendFinishUncoopClose(walletA.getSender(), msgValue);
+
+            const closeTx = findTransactionRequired(res.transactions, {
+                on: tonChannel.address,
+                op: Op.OP_FINISH_UNCOOPERATIVE_CLOSE,
+                aborted: false,
+                outMessagesCount: 1 + Number(isB)
+            });
+
+            if(closeTx.description.type !== 'generic') {
+                throw new Error("No way");
+            }
+
+            if(closeTx.description.storagePhase) {
+                contractBalance -= closeTx.description.storagePhase.storageFeesCollected;
+            }
+            if(isB) {
+                // All the balance accounted should go to B
+                expect(quarantineBefore.stateA.sent).toBeGreaterThan(stateBefore.balance.balanceA);
+                const expValue = stateBefore.balance.balanceA + stateBefore.balance.balanceB;
+
+                expect(res.transactions).toHaveTransaction({
+                    on: walletB.address,
+                    op: Op.OP_CHANNEL_CLOSED,
+                    value: expValue - msgPrices.lumpPrice
+                });
+
+                contractBalance -= expValue;
+            } else {
+                expect(quarantineBefore.stateB.sent).toBeGreaterThan(stateBefore.balance.balanceB);
+            }
+
+            // Levtovers always go to A
+            expect(res.transactions).toHaveTransaction({
+                on: walletA.address,
+                op: Op.OP_CHANNEL_CLOSED,
+                value: contractBalance - computedGeneric(closeTx).gasFees - msgPrices.lumpPrice
+            });
+        }
+
         await blockchain.loadFrom(prevState);
     });
     it('should not allow to settle conditionals before quarantine end', async () => {
