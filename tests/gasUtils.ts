@@ -1,4 +1,4 @@
-import { Cell, Dictionary, Slice } from '@ton/core';
+import { Cell, Dictionary, Slice, Transaction } from '@ton/core';
 
 export const configParseMsgPrices = (sc: Slice) => {
     let magic = sc.loadUint(8);
@@ -27,4 +27,12 @@ export const getMsgPrices = (configRaw: Cell, workchain: 0 | -1 ) => {
 
     return configParseMsgPrices(prices.beginParse());
 }
+
+export const computedGeneric = (trans: Transaction) => {
+        if(trans.description.type !== "generic")
+            throw("Expected generic transaction");
+        if(trans.description.computePhase.type !== "vm")
+            throw("Compute phase expected")
+        return trans.description.computePhase;
+    };
 
