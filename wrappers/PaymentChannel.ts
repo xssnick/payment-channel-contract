@@ -42,7 +42,7 @@ type PaymentConfigCustomCurrencyJetton = PaymentConfigBase & {
     customCurrency: true;
     isJetton:true;
     jettonRoot: Address;
-    jettonWallet: Address
+    jettonWallet?: Address
 };
 
 
@@ -123,7 +123,9 @@ function paymentConfigToCell(config: PaymentConfig) {
         bs.storeBit(config.isJetton);
 
         if(config.isJetton) {
-            bs.storeAddress(config.jettonRoot).storeAddress(config.jettonWallet);
+            bs.storeRef(
+                beginCell().storeAddress(config.jettonRoot).storeAddress(config.jettonWallet ?? null).endCell()
+            );
         } else {
             bs.storeUint(config.extraId, 32);
         }
@@ -298,11 +300,17 @@ export class PaymentChannel implements Contract {
         });
     }
 
+    static topUpMessage(isA: boolean) {
+        return beginCell()
+                .storeUint(Op.OP_TOP_UP_BALANCE, 32)
+                .storeBit(isA)
+               .endCell();
+    }
     async sendTopUp(provider: ContractProvider, via: Sender, isA: boolean, value: bigint) {
         await provider.internal(via, {
             value,
             sendMode: SendMode.PAY_GAS_SEPARATELY,
-            body: beginCell().storeUint(Op.OP_TOP_UP_BALANCE, 32).storeBit(isA).endCell()
+            body: PaymentChannel.topUpMessage(isA)
         });
     }
 
