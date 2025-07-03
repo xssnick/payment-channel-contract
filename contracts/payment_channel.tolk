@@ -119,7 +119,7 @@ fun sendPayoutJetton(wallet: slice, sAddr: slice, amount: int, channelId: int, o
                 .storeSlice(sAddr)
                 .storeMaybeRef(null)
                 .storeCoins(FEE_JETTON_FORWARD)
-                .storeBool(true)
+                .storeBool(false)
                 .storeMessageOp(op)
                 .storeUint(channelId, 128)
             .endCell())
