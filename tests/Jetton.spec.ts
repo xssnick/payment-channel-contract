@@ -1064,6 +1064,12 @@ describe('PaymentChannel', () => {
                 await assertJettonNotification(res.transactions, walletA.address, tonChannel.address, expectedA, channelClosedPayload);
                 await assertJettonNotification(res.transactions, walletB.address, tonChannel.address, expectedB, channelClosedPayload);
 
+                // Expect balance leftowers to go to A through excess
+                expect(res.transactions).toHaveTransaction({
+                    on: walletA.address,
+                    op: JettonOp.excesses
+                });
+
                 // Check that jetton balance increased accordingly
                 expect(await jettonA.getJettonBalance()).toEqual(balanceBeforeA + expectedA)
                 expect(await jettonB.getJettonBalance()).toEqual(balanceBeforeB + expectedB)
@@ -2312,22 +2318,14 @@ describe('PaymentChannel', () => {
                 stateBefore.balance.balanceA,
                 channelClosedPayload
             );
-            /*
-            expect(res.transactions).toHaveTransaction({
-                on: walletB.address,
-                from: tonChannel.address,
-                op: Op.OP_CHANNEL_CLOSED,
-                // We don't expect any changes sincle quarantine state matches commited state
-                value: stateBefore.balance.balanceB - msgPrices.lumpPrice
-            });
+
+            // Expect balance leftowers to go to A through excess
             expect(res.transactions).toHaveTransaction({
                 on: walletA.address,
-                from: tonChannel.address,
-                op: Op.OP_CHANNEL_CLOSED,
-                value: (v) => v! >= stateBefore.balance.balanceA - msgPrices.lumpPrice
+                op: JettonOp.excesses
             });
-            */
 
+            expect((await blockchain.getContract(tonChannel.address)).balance).toBe(0n);
             const dataAfter = await tonChannel.getChannelData();
             assertChannelClosed(dataAfter, stateBefore.seqnoA + 1n, stateBefore.seqnoB + 1n);
         }
@@ -2387,16 +2385,13 @@ describe('PaymentChannel', () => {
                     channelClosedPayload
                 );
             }
-
-
-            /*
-            // Levtovers always go to A
+            // Either way TON excess goes to A
             expect(res.transactions).toHaveTransaction({
                 on: walletA.address,
-                op: Op.OP_CHANNEL_CLOSED,
-                value: contractBalance - computedGeneric(closeTx).gasFees - msgPrices.lumpPrice
+                op: JettonOp.excesses
             });
-            */
+
+
         }
 
         await blockchain.loadFrom(prevState);
