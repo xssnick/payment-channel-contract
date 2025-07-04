@@ -1069,7 +1069,7 @@ describe('PaymentChannel', () => {
                 expect(await jettonB.getJettonBalance()).toEqual(balanceBeforeB + expectedB)
                 const dataAfter = await tonChannel.getChannelData();
 
-                // expect(smc.balance).toBe(0n);
+                expect(smc.balance).toBe(0n);
                 assertChannelClosed(dataAfter, closeState.seqnoA, closeState.seqnoB);
             } finally {
                 await blockchain.loadFrom(prevState);
