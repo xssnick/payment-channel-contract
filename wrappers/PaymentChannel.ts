@@ -42,7 +42,7 @@ type PaymentConfigCustomCurrencyJetton = PaymentConfigBase & {
     customCurrency: true;
     isJetton:true;
     jettonRoot: Address;
-    jettonWallet: Address
+    jettonWallet?: Address
 };
 
 
@@ -123,7 +123,9 @@ function paymentConfigToCell(config: PaymentConfig) {
         bs.storeBit(config.isJetton);
 
         if(config.isJetton) {
-            bs.storeAddress(config.jettonRoot).storeAddress(config.jettonWallet);
+            bs.storeRef(
+                beginCell().storeAddress(config.jettonRoot).storeAddress(config.jettonWallet ?? null).endCell()
+            );
         } else {
             bs.storeUint(config.extraId, 32);
         }
@@ -218,7 +220,7 @@ function closureConfigToCell(config: ClosureConfig) {
             .storeUint(config.closeDuration, 32)
            .endCell();
 }
-function balnceToCell(balance: Balance) {
+export function balanceToCell(balance: Balance) {
     return beginCell()
             .storeCoins(balance.depositA)
             .storeCoins(balance.depositB)
@@ -230,7 +232,7 @@ function balnceToCell(balance: Balance) {
 }
 
 function emptyBalanceCell() {
-    return balnceToCell({
+    return balanceToCell({
         depositA: 0n,
         depositB: 0n,
         withdrawA: 0n,
@@ -298,11 +300,17 @@ export class PaymentChannel implements Contract {
         });
     }
 
+    static topUpMessage(isA: boolean) {
+        return beginCell()
+                .storeUint(Op.OP_TOP_UP_BALANCE, 32)
+                .storeBit(isA)
+               .endCell();
+    }
     async sendTopUp(provider: ContractProvider, via: Sender, isA: boolean, value: bigint) {
         await provider.internal(via, {
             value,
             sendMode: SendMode.PAY_GAS_SEPARATELY,
-            body: beginCell().storeUint(Op.OP_TOP_UP_BALANCE, 32).storeBit(isA).endCell()
+            body: PaymentChannel.topUpMessage(isA)
         });
     }
 
@@ -332,7 +340,7 @@ export class PaymentChannel implements Contract {
                 .storeRef(sigBCell)
                .endCell();
     }
-    async sendCooperativeCommit(provider: ContractProvider, via: Sender, commit: SignedCommit, value: bigint = toNano('0.05'), channelId?: bigint) {
+    async sendCooperativeCommit(provider: ContractProvider, via: Sender, commit: SignedCommit, value: bigint = toNano('0.1'), channelId?: bigint) {
         const curId = channelId ?? this.channelId;
         if(!curId) {
             throw new Error("Channel id is required");
@@ -407,6 +415,37 @@ export class PaymentChannel implements Contract {
             value,
             sendMode: SendMode.PAY_GAS_SEPARATELY,
             body: PaymentChannel.uncooperativeCloseMessage(opts.isA, opts.stateA, opts.stateB, opts.key, curId)
+        });
+
+    }
+
+    static challengeQuarantineMessage(isA: boolean, signedStateA: Cell, signedStateB: Cell, key: Buffer, channelId: bigint) {
+        const msgBody = beginCell()
+                        .storeUint(Tags.TAG_CHALLENGE_QUARANTINEED_STATE, 32)
+                        .storeUint(channelId, 128)
+                        .storeRef(signedStateA)
+                        .storeRef(signedStateB)
+                       .endCell();
+
+        return beginCell().storeUint(Op.OP_CHALLENGE_QUARANTINEED_STATE, 32)
+                          .storeBit(isA)
+                          .storeBuffer(sign(msgBody.hash(), key))
+                          .storeSlice(msgBody.asSlice())
+               .endCell();
+
+    }
+
+    async sendChallengeQuarantine(provider: ContractProvider, via: Sender, opts: {isA: boolean, stateA: Cell, stateB: Cell, key: Buffer}, channelId?: bigint, value: bigint = toNano('0.05')) {
+        const curId = channelId ?? this.channelId;
+
+        if(!curId) {
+            throw new Error("Channel id is required");
+        }
+
+        await provider.internal(via, {
+            value,
+            sendMode: SendMode.PAY_GAS_SEPARATELY,
+            body: PaymentChannel.challengeQuarantineMessage(opts.isA, opts.stateA, opts.stateB, opts.key, curId)
         });
 
     }

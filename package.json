@@ -10,10 +10,10 @@
         "@tact-lang/compiler": "^1.6.0",
         "@ton-community/func-js": "^0.9.1",
         "@ton/blueprint": "^0.29.0",
-        "@ton/core": "~0",
+        "@ton/core": "^0.61.0",
         "@ton/crypto": "^3.3.0",
-        "@ton/sandbox": "^0.27.1",
-        "@ton/test-utils": "^0.5.0",
+        "@ton/sandbox": "^0.34.0",
+        "@ton/test-utils": "^0.8.0",
         "@ton/ton": "^15.2.1",
         "@types/jest": "^29.5.14",
         "@types/node": "^22.13.8",
@@ -26,5 +26,4 @@
     "overrides": {
         "@ton/tolk-js": "0.12.0"
     }
-
 }

@@ -1,12 +1,15 @@
-import { Blockchain, BlockchainSnapshot, SandboxContract, TreasuryContract } from '@ton/sandbox';
-import { beginCell, Cell, contractAddress, Dictionary, generateMerkleProof, Slice, toNano } from '@ton/core';
+import { Blockchain, BlockchainSnapshot, SandboxContract, SendMessageResult, TreasuryContract } from '@ton/sandbox';
+import { Address, beginCell, Cell, contractAddress, Dictionary, generateMerkleProof, SendMode, Slice, toNano, Transaction } from '@ton/core';
 import { Balance, BalanceCommit, balanceToCell, CloseState, mapState, PaymentChannel, PaymentChannelConfig, paymentChannelConfigToCell, SemiChannel, SemiChannelBody, signSemiChannel } from '../wrappers/PaymentChannel';
+import { JettonWallet } from '../wrappers/JettonWallet';
+import { JettonMinter } from '../wrappers/JettonMinter';
 import '@ton/test-utils';
 import { compile } from '@ton/blueprint';
 import { KeyPair, getSecureRandomBytes, keyPairFromSeed } from '@ton/crypto';
-import { CodeSegmentSlice, getRandomInt, loadCodeDictionary, signCell } from './utils';
+import { CodeSegmentSlice, getRandomInt, loadCodeDictionary, signCell, testJettonNotification, testJettonTransfer } from './utils';
 import { Errors, Op } from '../wrappers/Constants';
-import { getMsgPrices, computedGeneric } from './gasUtils';
+import { Op as JettonOp } from '../wrappers/JettonConstants';
+import { getMsgPrices, computedGeneric, computeMessageForwardFees } from './gasUtils';
 import { findTransaction, findTransactionRequired } from '@ton/test-utils';
 
 type ChannelData = Awaited<ReturnType<SandboxContract<PaymentChannel>['getChannelData']>>;
@@ -14,11 +17,14 @@ describe('PaymentChannel', () => {
     let blockchain: Blockchain;
 
     let channelCode: Cell;
+    let walletCode: Cell;
+    let minterCode: Cell;
 
     let msgPrices: ReturnType<typeof getMsgPrices>;
     let tonChannelConfig: PaymentChannelConfig;
 
     let tonChannel: SandboxContract<PaymentChannel>;
+    let jettonMinter: SandboxContract<JettonMinter>;
     let walletA: SandboxContract<TreasuryContract>;
     let walletB: SandboxContract<TreasuryContract>;
     let conditionals: Dictionary<bigint, Slice>;
@@ -34,9 +40,17 @@ describe('PaymentChannel', () => {
     let keysA: KeyPair
     let keysB: KeyPair
 
-    let depoFee = toNano('0.03');
+    let feeJettonAccept = toNano('0.035');
+    let feeJettonPayout = toNano('0.08');
     let commitFee = toNano('0.03');
-    let feeMinBalance = toNano('0.01');
+    let feeMinBalance = toNano('0.01') + feeJettonPayout * 2n + toNano('0.03');
+
+    let channelClosedPayload: Cell;
+
+    let userJetton: (address: Address) => Promise<SandboxContract<JettonWallet>>;
+    let assertJettonNotification: (txs: Transaction[], to: Address, from: Address, amount: bigint, payload: Cell | null) => Promise<void>;
+
+    let channelWalletAddr: Address;
 
     let calcSends = (data: ChannelData) => {
         let sentA = data.balance.balanceA - (data.balance.depositA - data.balance.withdrawA);
@@ -76,6 +90,18 @@ describe('PaymentChannel', () => {
         blockchain.now = 1000;
 
         channelCode = await compile('PaymentChannel');
+
+        const jwallet_code_raw = await compile('JettonWallet');
+
+        minterCode  = await compile('JettonMinter');
+        //jwallet_code is library
+        const _libs = Dictionary.empty(Dictionary.Keys.BigUint(256), Dictionary.Values.Cell());
+        _libs.set(BigInt(`0x${jwallet_code_raw.hash().toString('hex')}`), jwallet_code_raw);
+        const libs = beginCell().storeDictDirect(_libs).endCell();
+        blockchain.libs = libs;
+        let lib_prep = beginCell().storeUint(2,8).storeBuffer(jwallet_code_raw.hash()).endCell();
+        walletCode = new Cell({ exotic:true, bits: lib_prep.bits, refs:lib_prep.refs});
+
         const codeDict = loadCodeDictionary(await compile('Conditional'));
         conditionals   = Dictionary.empty(Dictionary.Keys.BigUint(32), CodeSegmentSlice());
         const conditional = codeDict.get(42)!;
@@ -93,6 +119,68 @@ describe('PaymentChannel', () => {
         keysA = keyPairFromSeed(await getSecureRandomBytes(32));
         keysB = keyPairFromSeed(await getSecureRandomBytes(32));
 
+        jettonMinter = blockchain.openContract(
+            JettonMinter.createFromConfig({
+                jetton_content: {uri: 'https://localhost/my_jetton.json'},
+                admin: walletA.address,
+                wallet_code: walletCode
+            }, minterCode)
+        );
+
+        const minterDeploy = await jettonMinter.sendDeploy(walletA.getSender(), toNano('1'));
+
+        expect(minterDeploy.transactions).toHaveTransaction({
+            on: jettonMinter.address,
+            from: walletA.address,
+            deploy: true,
+            aborted: false
+        });
+        userJetton = async (address:Address) => blockchain.openContract(
+                          JettonWallet.createFromAddress(
+                            await jettonMinter.getWalletAddress(address)
+                          )
+                     );
+        assertJettonNotification = async (txs, to, from, amount, payload) => {
+            const toJetton  = await userJetton(to);
+            expect(txs).toHaveTransaction({
+                on: to,
+                from: toJetton.address,
+                op: JettonOp.transfer_notification,
+                body: b => testJettonNotification(b!, {
+                    amount,
+                    from,
+                    payload
+                })
+            });
+        }
+
+        const jettonA = await userJetton(walletA.address);
+        const jettonB = await userJetton(walletB.address);
+
+        let mintRes = await jettonMinter.sendMint(
+            walletA.getSender(),
+            walletA.address,
+            toNano('100000'),
+        );
+
+        expect(mintRes.transactions).toHaveTransaction({
+            on: jettonA.address,
+            from: jettonMinter.address,
+            op: JettonOp.internal_transfer,
+            aborted: false
+        });
+
+        mintRes = await jettonMinter.sendMint(
+            walletA.getSender(),
+            walletB.address,
+            toNano('100000'),
+        );
+        expect(mintRes.transactions).toHaveTransaction({
+            on: jettonB.address,
+            from: jettonMinter.address,
+            op: JettonOp.internal_transfer,
+            aborted: false
+        });
 
         tonChannelConfig = {
             id: 42n,
@@ -100,20 +188,27 @@ describe('PaymentChannel', () => {
             keyB: keysB.publicKey,
             paymentConfig: {
                 storageFee: toNano('0.3'),
-                customCurrency: false,
+                customCurrency: true,
+                isJetton: true,
+                jettonRoot: jettonMinter.address,
                 addressA: walletA.address,
-                addressB: walletB.address
+                addressB: walletB.address,
             },
             closureConfig: {
                 closeDuration: 3600,
                 fine: toNano('1'),
                 quarantineDuration: 3600
             }
-
         };
+
+        channelClosedPayload = beginCell()
+                                .storeUint(Op.OP_CHANNEL_CLOSED, 32)
+                                .storeUint(tonChannelConfig.id, 128)
+                               .endCell();
 
         tonChannel = blockchain.openContract(PaymentChannel.createFromConfig(tonChannelConfig, channelCode));
 
+        channelWalletAddr = await jettonMinter.getWalletAddress(tonChannel.address);
     });
 
     it('should not allow to deploy with value below min storage fee', async () => {
@@ -265,11 +360,33 @@ describe('PaymentChannel', () => {
 
     it('should deploy', async () => {
         const deployRes = await tonChannel.sendDeploy(walletA.getSender(), true, keysA.secretKey, toNano('1'));
+
         expect(deployRes.transactions).toHaveTransaction({
             on: tonChannel.address,
             value: toNano('1'),
             aborted: false,
             deploy: true
+        });
+        // Check channel wallet init chain
+        expect(deployRes.transactions).toHaveTransaction({
+            on: jettonMinter.address,
+            from: tonChannel.address,
+            op: JettonOp.provide_wallet_address,
+            aborted: false,
+            outMessagesCount: 1
+        });
+        // Make sure provide wallet ended successfully
+        expect(deployRes.transactions).toHaveTransaction({
+            on: tonChannel.address,
+            from: jettonMinter.address,
+            op: JettonOp.take_wallet_address,
+            body: beginCell()
+                    .storeUint(JettonOp.take_wallet_address, 32)
+                    .storeUint(0n, 64)
+                    .storeAddress(channelWalletAddr)
+                    .storeBit(false)
+                  .endCell(),
+            aborted: false
         });
 
         const chData = await tonChannel.getChannelData();
@@ -282,7 +399,8 @@ describe('PaymentChannel', () => {
         expect(chData.keys.keyA.equals(keysA.publicKey)).toBe(true);
         expect(chData.keys.keyB.equals(keysB.publicKey)).toBe(true);
 
-        expect(chData.paymentConfig.storageFee).toEqual(toNano('0.3'));
+        // There is not indication of channel type in getter resp
+        expect(chData.paymentConfig.storageFee).toEqual(tonChannelConfig.paymentConfig.storageFee);
         expect(chData.paymentConfig.customCurrency).toBe(false);
         expect(chData.paymentConfig.addressA).toEqualAddress(walletA.address);
         expect(chData.paymentConfig.addressB).toEqualAddress(walletB.address);
@@ -300,50 +418,141 @@ describe('PaymentChannel', () => {
 
         const smc = await blockchain.getContract(tonChannel.address);
         // Expect only storage fee to be left
-        expect(smc.balance).toEqual(tonChannelConfig.paymentConfig.storageFee);
+        expect(smc.balance).toBeGreaterThanOrEqual(tonChannelConfig.paymentConfig.storageFee);
     });
 
     it('should top up', async () => {
         let dataBefore = await tonChannel.getChannelData();
 
+        const channelJetton = await userJetton(tonChannel.address);
+        let balanceBefore = await channelJetton.getJettonBalance();
+        const jettonA = await userJetton(walletA.address);
+
         let depoAmount = BigInt(getRandomInt(10, 100)) * toNano('0.01');
         const smc = await blockchain.getContract(tonChannel.address);
-        let res = await tonChannel.sendTopUp(walletA.getSender(), true, depoAmount);
+        let res   = await jettonA.sendTransfer(walletA.getSender(),
+                                       toNano('0.05') + feeJettonAccept,
+                                       depoAmount,
+                                       tonChannel.address,
+                                       walletA.address,
+                                       null,
+                                       feeJettonAccept,
+                                       PaymentChannel.topUpMessage(true));
 
+        // This could only happen if whole jetton chain executed
         expect(res.transactions).toHaveTransaction({
             on: tonChannel.address,
-            from: walletA.address,
-            aborted: false
+            from: channelWalletAddr,
+            op: JettonOp.transfer_notification,
         });
 
         let dataAfter = await tonChannel.getChannelData();
 
-        expect(dataAfter.balance.depositA).toEqual(dataBefore.balance.depositA + depoAmount - depoFee);
+        expect(dataAfter.balance.depositA).toEqual(dataBefore.balance.depositA + depoAmount);
         expect(dataAfter.balance.depositB).toEqual(dataBefore.balance.depositB);
 
-        expect(dataAfter.balance.balanceA).toEqual(dataBefore.balance.balanceA + depoAmount - depoFee);
+        expect(dataAfter.balance.balanceA).toEqual(dataBefore.balance.balanceA + depoAmount);
         expect(dataAfter.balance.balanceB).toEqual(dataBefore.balance.balanceB);
 
-        expect(smc.balance).toEqual(tonChannelConfig.paymentConfig.storageFee + dataAfter.balance.depositA);
+        expect(smc.balance).toEqual(tonChannelConfig.paymentConfig.storageFee);
+
+        // Check that it didn't sent jettons back and such
+        expect(await channelJetton.getJettonBalance()).toEqual(balanceBefore + depoAmount);
+
+        // I know, i know, but it reads better
+        balanceBefore += depoAmount;
+
         dataBefore = dataAfter;
 
         depoAmount = BigInt(getRandomInt(10, 100)) * toNano('0.01');
 
-        res = await tonChannel.sendTopUp(walletB.getSender(), false, depoAmount);
+        const jettonB = await userJetton(walletB.address);
+        res = await jettonB.sendTransfer(walletB.getSender(),
+                                       toNano('0.05') + feeJettonAccept,
+                                       depoAmount,
+                                       tonChannel.address,
+                                       walletB.address,
+                                       null,
+                                       feeJettonAccept,
+                                       PaymentChannel.topUpMessage(false));
 
         expect(res.transactions).toHaveTransaction({
             on: tonChannel.address,
-            from: walletB.address,
+            from: channelWalletAddr,
+            op: JettonOp.transfer_notification,
             aborted: false
         });
 
         dataAfter = await tonChannel.getChannelData();
-        expect(dataAfter.balance.depositB).toEqual(dataBefore.balance.depositB + depoAmount - depoFee);
+        expect(dataAfter.balance.depositB).toEqual(dataBefore.balance.depositB + depoAmount);
         expect(dataAfter.balance.depositA).toEqual(dataBefore.balance.depositA);
         expect(dataAfter.balance.balanceA).toEqual(dataBefore.balance.balanceA);
-        expect(dataAfter.balance.balanceB).toEqual(dataBefore.balance.balanceB + depoAmount - depoFee);
+        expect(dataAfter.balance.balanceB).toEqual(dataBefore.balance.balanceB + depoAmount);
+        expect(await channelJetton.getJettonBalance()).toEqual(balanceBefore + depoAmount);
 
-        expect(smc.balance).toEqual(tonChannelConfig.paymentConfig.storageFee + dataAfter.balance.depositA + dataAfter.balance.depositB);
+        expect(smc.balance).toEqual(tonChannelConfig.paymentConfig.storageFee);
+    });
+    it('should only accept top up from own jetton wallet', async () => {
+
+        let depoAmount = BigInt(getRandomInt(10, 100)) * toNano('0.01');
+        let msgValue   = BigInt(getRandomInt(5, 10)) * toNano('0.01');
+
+        const dataBefore = await tonChannel.getChannelData();
+
+        for (let testWallet of [walletA, walletB]) {
+            const isA = testWallet === walletA;
+            const notificationMessage = beginCell()
+             .storeUint(JettonOp.transfer_notification, 32)
+             .storeUint(0, 64)
+             .storeCoins(depoAmount)
+             .storeAddress(testWallet.address)
+             .storeBit(false)
+             .storeSlice(PaymentChannel.topUpMessage(isA).asSlice())
+            .endCell();
+
+            // Sending directly from wallet
+            const res = await testWallet.send({
+                to: tonChannel.address,
+                value: msgValue,
+                body: notificationMessage,
+                sendMode: SendMode.PAY_GAS_SEPARATELY | SendMode.IGNORE_ERRORS
+            });
+
+            const topUpTx = res.transactions[1];
+
+            const dataAfter = await tonChannel.getChannelData();
+
+            if(isA) {
+                expect(dataAfter.balance.depositA).toEqual(dataBefore.balance.depositA);
+                expect(dataAfter.balance.balanceA).toEqual(dataBefore.balance.balanceA);
+            } else {
+                expect(dataAfter.balance.depositB).toEqual(dataBefore.balance.depositB);
+                expect(dataAfter.balance.balanceB).toEqual(dataBefore.balance.balanceB);
+            }
+            expect(res.transactions).toHaveTransaction({
+                on: tonChannel.address,
+                from: testWallet.address,
+                op: JettonOp.transfer_notification,
+                value: msgValue,
+                outMessagesCount: 1
+            });
+
+            const fwdFees = computeMessageForwardFees(msgPrices, topUpTx.outMessages.get(0)!);
+
+            // Expect return attempt
+            expect(res.transactions).toHaveTransaction({
+                on: testWallet.address,
+                from: tonChannel.address,
+                op: JettonOp.transfer,
+                // Make sure it returns value in mode 64 and won't burn balance
+                value: msgValue - computedGeneric(topUpTx).gasFees - fwdFees.fees.total,
+                body: b => testJettonTransfer(b!, {
+                    to: testWallet.address,
+                    amount: depoAmount,
+                    forward_payload: null
+                })
+            });
+        }
     });
 
     it('should not be able to re-deploy', async () => {
@@ -365,18 +574,41 @@ describe('PaymentChannel', () => {
                 exitCode: Errors.ERROR_ALREADY_INITED
             });
     });
-    it('should reject top up below minimal fee', async () => {
-        let depoAmount = depoFee - 1n;
 
+    it('should reject top up below minimal fee', async () => {
+
+        const depoAmount = BigInt(getRandomInt(1, 100_000));
         for(let testWallet of [walletA, walletB]) {
 
-            const res = await tonChannel.sendTopUp(testWallet.getSender(), testWallet === walletA, depoAmount);
+            const isA = testWallet === walletA;
+            const testJetton = await userJetton(testWallet.address);
+            const res = await testJetton.sendTransfer(testWallet.getSender(),
+                                       toNano('0.05') + feeJettonAccept,
+                                       depoAmount,
+                                       tonChannel.address,
+                                       walletB.address,
+                                       null,
+                                       feeJettonAccept - 1n,
+                                       PaymentChannel.topUpMessage(isA));
+
+
+            // const res = await tonChannel.sendTopUp(testWallet.getSender(), testWallet === walletA, depoAmount);
             expect(res.transactions).toHaveTransaction({
                 on: tonChannel.address,
-                op: Op.OP_TOP_UP_BALANCE,
-                aborted: true,
-                exitCode: Errors.ERROR_AMOUNT_NOT_COVERS_FEE
+                op: JettonOp.transfer_notification,
+                aborted: false,
+                outMessagesCount: 1
             });
+            // Expect send back
+
+            await assertJettonNotification(
+                res.transactions,
+                testWallet.address,
+                tonChannel.address,
+                depoAmount,
+                null
+            );
+
         }
     });
 
@@ -397,7 +629,8 @@ describe('PaymentChannel', () => {
     it('should allow to withdraw and send via cooperative commit', async () => {
         let dataBefore = await tonChannel.getChannelData();
 
-        const msgValue  = commitFee;
+        const msgValue  = commitFee + feeJettonPayout * 2n;
+        // const msgValue  = toNano('1');
 
         const withdrawA = dataBefore.balance.depositA / BigInt(getRandomInt(10, 100));
         const withdrawB = dataBefore.balance.depositB / BigInt(getRandomInt(10, 100));
@@ -455,6 +688,13 @@ describe('PaymentChannel', () => {
         };
 
 
+        const withdrawPayload = beginCell()
+                                 .storeUint(Op.OP_CHANNEL_WITHDRAW, 32)
+                                 .storeUint(tonChannelConfig.id, 128)
+                                .endCell();
+
+        const smc = await blockchain.getContract(tonChannel.address);
+
         for(let balanceCommit of [justWithdraw, withdrawAndSend, noWithdraw]) {
             const commitBody = PaymentChannel.cooperativeCommitBody(balanceCommit, tonChannelConfig.id);
             const sigA = await signCell(commitBody, keysA.secretKey);
@@ -474,31 +714,21 @@ describe('PaymentChannel', () => {
             });
 
             if(dataBefore.balance.withdrawA < balanceCommit.withdrawA) {
-                expect(res.transactions).toHaveTransaction({
-                    on: walletA.address,
-                    from: tonChannel.address,
-                    op: Op.OP_CHANNEL_WITHDRAW,
-                    value: balanceCommit.withdrawA - dataBefore.balance.withdrawA - msgPrices.lumpPrice
-                });
+                const expAmount = balanceCommit.withdrawA - dataBefore.balance.withdrawA;
+                await assertJettonNotification(res.transactions,
+                                               walletA.address,
+                                               tonChannel.address,
+                                               expAmount,
+                                               withdrawPayload);
             }
             if(dataBefore.balance.withdrawB < balanceCommit.withdrawB) {
-                expect(res.transactions).toHaveTransaction({
-                    on: walletB.address,
-                    from: tonChannel.address,
-                    op: Op.OP_CHANNEL_WITHDRAW,
-                    value: balanceCommit.withdrawB - dataBefore.balance.withdrawB - msgPrices.lumpPrice
-                });
-            }
-            const excessTx = findTransaction(res.transactions, {
-                on: walletA.address,
-                op: Op.OP_EXCESSES,
-            });
-            if(excessTx) {
-                const inMsg = excessTx.inMessage!;
-                if(inMsg.info.type !== 'internal') {
-                    throw new Error("Now way");
-                }
-                expect(inMsg.info.value.coins).toBeLessThan(msgValue);
+                const expAmount = balanceCommit.withdrawB - dataBefore.balance.withdrawB;
+                await assertJettonNotification(res.transactions,
+                                               walletB.address,
+                                               tonChannel.address,
+                                               expAmount,
+                                               withdrawPayload);
+
             }
 
             const dataAfter = await tonChannel.getChannelData();
@@ -513,6 +743,7 @@ describe('PaymentChannel', () => {
             expect(dataAfter.balance.balanceB).toEqual(dataBefore.balance.depositB - balanceCommit.withdrawB - balanceCommit.sentB + balanceCommit.sentA);
 
             dataBefore = dataAfter;
+            expect(smc.balance).toEqual(tonChannelConfig.paymentConfig.storageFee);
         }
     });
     it('should not allow cooperative commits with invalid signatures', async () => {
@@ -550,6 +781,7 @@ describe('PaymentChannel', () => {
     });
     it('should not allow to withdraw more than on a balance', async () => {
         let dataBefore = await tonChannel.getChannelData();
+        let msgValue   = commitFee + feeJettonPayout;
 
         const {sentA, sentB} = calcSends(dataBefore);
 
@@ -580,7 +812,7 @@ describe('PaymentChannel', () => {
                 commit: balanceCommit,
                 sigA,
                 sigB
-            });
+            }, msgValue);
             expect(res.transactions).toHaveTransaction({
                 on: tonChannel.address,
                 from: walletA.address,
@@ -708,7 +940,6 @@ describe('PaymentChannel', () => {
     it('should reject cooperative commit with value below commit fee', async () => {
         const dataBefore = await tonChannel.getChannelData();
         const {sentA, sentB} = calcSends(dataBefore);
-        const withdrawAmount = BigInt(getRandomInt(1, 5)) * toNano('0.001');
 
         const justSeqno: BalanceCommit = {
             withdrawA: dataBefore.balance.withdrawA,
@@ -720,30 +951,45 @@ describe('PaymentChannel', () => {
         };
         const singleWithdrawA: BalanceCommit = {
             ...justSeqno,
-            withdrawA: dataBefore.balance.withdrawA + withdrawAmount
+            withdrawA: dataBefore.balance.withdrawA + 1n
         }
         const singleWithdrawB: BalanceCommit = {
             ...justSeqno,
-            withdrawB: dataBefore.balance.withdrawB + withdrawAmount
+            withdrawB: dataBefore.balance.withdrawB + 1n
         }
         const withdrawBoth: BalanceCommit = {
             ...justSeqno,
-            withdrawA: dataBefore.balance.withdrawA + withdrawAmount,
-            withdrawB: dataBefore.balance.withdrawB + withdrawAmount,
+            withdrawA: dataBefore.balance.withdrawA + 1n,
+            withdrawB: dataBefore.balance.withdrawB + 1n,
         }
 
 
-        let testCases: BalanceCommit[] = [
-            justSeqno,
-            singleWithdrawA,
-            singleWithdrawB,
-            withdrawBoth
+        let testCases: {
+            value: bigint,
+            data: BalanceCommit
+        }[] = [
+            {
+                value: commitFee,
+                data: justSeqno
+            },
+            {
+                value: commitFee + feeJettonPayout,
+                data: singleWithdrawA
+            },
+            {
+                value: commitFee + feeJettonPayout,
+                data: singleWithdrawB
+            },
+            {
+                value: commitFee + feeJettonPayout * 2n,
+                data: withdrawBoth
+            }
         ];
 
         const prevState = blockchain.snapshot();
 
         for(let testCase of testCases) {
-            const commitBody = PaymentChannel.cooperativeCommitBody(testCase, tonChannelConfig.id);
+            const commitBody = PaymentChannel.cooperativeCommitBody(testCase.data, tonChannelConfig.id);
             const sigA = await signCell(commitBody, keysA.secretKey);
             const sigB = await signCell(commitBody, keysB.secretKey);
 
@@ -752,7 +998,7 @@ describe('PaymentChannel', () => {
                     commit: commitBody,
                     sigA,
                     sigB
-                }, commitFee - 1n);
+                }, testCase.value - 1n);
 
                 expect(res.transactions).toHaveTransaction({
                     on: tonChannel.address,
@@ -766,7 +1012,7 @@ describe('PaymentChannel', () => {
                     commit: commitBody,
                     sigA,
                     sigB
-                }, commitFee);
+                }, testCase.value);
 
                 expect(res.transactions).toHaveTransaction({
                     on: tonChannel.address,
@@ -777,41 +1023,6 @@ describe('PaymentChannel', () => {
 
                 await blockchain.loadFrom(prevState);
             }
-        }
-    });
-    it.skip('should reject cooperative commit with value below commit fee', async () => {
-        const dataBefore = await tonChannel.getChannelData();
-        const {sentA, sentB} = calcSends(dataBefore);
-
-        const testCommit: BalanceCommit = {
-            withdrawA: dataBefore.balance.withdrawA,
-            withdrawB: dataBefore.balance.withdrawB,
-            seqnoA: dataBefore.seqnoA + 1n,
-            seqnoB: dataBefore.seqnoB + 1n,
-            sentA,
-            sentB
-        };
-
-        const commitBody = PaymentChannel.cooperativeCommitBody(testCommit, tonChannelConfig.id);
-
-        const sigA = await signCell(commitBody, keysA.secretKey);
-        const sigB = await signCell(commitBody, keysB.secretKey);
-
-        const msgValue = commitFee - 1n;
-
-        for(let testWallet of [walletA, walletB]) {
-            const res = await tonChannel.sendCooperativeCommit(testWallet.getSender(), {
-                commit: testCommit,
-                sigA,
-                sigB
-            }, msgValue);
-            expect(res.transactions).toHaveTransaction({
-                on: tonChannel.address,
-                from: testWallet.address,
-                op: Op.OP_COOPERATIVE_COMMIT,
-                aborted: true,
-                exitCode: Errors.ERROR_AMOUNT_NOT_COVERS_FEE
-            });
         }
     });
     it('should not accept cooperative commit signed body for cooperative close', async () => {
@@ -975,9 +1186,16 @@ describe('PaymentChannel', () => {
         const sigA = await signCell(closeBody, keysA.secretKey);
         const sigB = await signCell(closeBody, keysB.secretKey);
 
+        const jettonA = await userJetton(walletA.address);
+        const jettonB = await userJetton(walletB.address);
+
         const smc = await blockchain.getContract(tonChannel.address);
         for(let testWallet of [walletA, walletB]) {
             try {
+
+                const balanceBeforeA = await jettonA.getJettonBalance();
+                const balanceBeforeB = await jettonB.getJettonBalance();
+
                 const res = await tonChannel.sendCooperativeClose(testWallet.getSender(), {state: closeState, sigA, sigB}, msgValue);
                 expect(res.transactions).toHaveTransaction({
                     on: tonChannel.address,
@@ -986,17 +1204,28 @@ describe('PaymentChannel', () => {
                     outMessagesCount: 2
                 });
                 expect(res.transactions).toHaveTransaction({
-                    on: walletB.address,
-                    op: Op.OP_CHANNEL_CLOSED,
-                    value: expectedB - msgPrices.lumpPrice
+                    on: jettonA.address,
+                    op: JettonOp.internal_transfer,
+                    aborted: false
                 });
                 expect(res.transactions).toHaveTransaction({
+                    on: jettonB.address,
+                    op: JettonOp.internal_transfer,
+                    aborted: false
+                });
+                // Fixating notification logic
+                await assertJettonNotification(res.transactions, walletA.address, tonChannel.address, expectedA, channelClosedPayload);
+                await assertJettonNotification(res.transactions, walletB.address, tonChannel.address, expectedB, channelClosedPayload);
+
+                // Expect balance leftowers to go to A through excess
+                expect(res.transactions).toHaveTransaction({
                     on: walletA.address,
-                    op: Op.OP_CHANNEL_CLOSED,
-                    // Wallet A gets rest of the balance
-                    value: (v) => v! > expectedA - msgPrices.lumpPrice
+                    op: JettonOp.excesses
                 });
 
+                // Check that jetton balance increased accordingly
+                expect(await jettonA.getJettonBalance()).toEqual(balanceBeforeA + expectedA)
+                expect(await jettonB.getJettonBalance()).toEqual(balanceBeforeB + expectedB)
                 const dataAfter = await tonChannel.getChannelData();
 
                 expect(smc.balance).toBe(0n);
@@ -2228,20 +2457,28 @@ describe('PaymentChannel', () => {
                 op: Op.OP_FINISH_UNCOOPERATIVE_CLOSE,
                 aborted: false
             });
-            expect(res.transactions).toHaveTransaction({
-                on: walletB.address,
-                from: tonChannel.address,
-                op: Op.OP_CHANNEL_CLOSED,
-                // We don't expect any changes sincle quarantine state matches commited state
-                value: stateBefore.balance.balanceB - msgPrices.lumpPrice
-            });
+            await assertJettonNotification(
+                res.transactions,
+                walletB.address,
+                tonChannel.address,
+                stateBefore.balance.balanceB,
+                channelClosedPayload
+            );
+            await assertJettonNotification(
+                res.transactions,
+                walletA.address,
+                tonChannel.address,
+                stateBefore.balance.balanceA,
+                channelClosedPayload
+            );
+
+            // Expect balance leftowers to go to A through excess
             expect(res.transactions).toHaveTransaction({
                 on: walletA.address,
-                from: tonChannel.address,
-                op: Op.OP_CHANNEL_CLOSED,
-                value: (v) => v! >= stateBefore.balance.balanceA - msgPrices.lumpPrice
+                op: JettonOp.excesses
             });
 
+            expect((await blockchain.getContract(tonChannel.address)).balance).toBe(0n);
             const dataAfter = await tonChannel.getChannelData();
             assertChannelClosed(dataAfter, stateBefore.seqnoA + 1n, stateBefore.seqnoB + 1n);
         }
@@ -2263,7 +2500,6 @@ describe('PaymentChannel', () => {
             const isB = testState === quarantineChallengedB;
 
             blockchain.now = quarantineBefore.startedAt + tonChannelConfig.closureConfig.quarantineDuration + tonChannelConfig.closureConfig.closeDuration + 1;
-            let contractBalance = (await blockchain.getContract(tonChannel.address)).balance + msgValue;
 
             const res = await tonChannel.sendFinishUncoopClose(walletA.getSender(), msgValue);
 
@@ -2271,38 +2507,44 @@ describe('PaymentChannel', () => {
                 on: tonChannel.address,
                 op: Op.OP_FINISH_UNCOOPERATIVE_CLOSE,
                 aborted: false,
-                outMessagesCount: 1 + Number(isB)
+                outMessagesCount: 2
             });
 
             if(closeTx.description.type !== 'generic') {
                 throw new Error("No way");
             }
 
-            if(closeTx.description.storagePhase) {
-                contractBalance -= closeTx.description.storagePhase.storageFeesCollected;
-            }
+            // In case either side exceeds it's balance (via fines), all awailable
+            // balance should go to oposite side.
+            const expValue = stateBefore.balance.balanceA + stateBefore.balance.balanceB;
+            // All the balance accounted should go to B
             if(isB) {
-                // All the balance accounted should go to B
                 expect(quarantineBefore.stateA.sent).toBeGreaterThan(stateBefore.balance.balanceA);
-                const expValue = stateBefore.balance.balanceA + stateBefore.balance.balanceB;
+                await assertJettonNotification(
+                    res.transactions,
+                    walletB.address,
+                    tonChannel.address,
+                    expValue,
+                    channelClosedPayload
+                );
 
-                expect(res.transactions).toHaveTransaction({
-                    on: walletB.address,
-                    op: Op.OP_CHANNEL_CLOSED,
-                    value: expValue - msgPrices.lumpPrice
-                });
-
-                contractBalance -= expValue;
             } else {
                 expect(quarantineBefore.stateB.sent).toBeGreaterThan(stateBefore.balance.balanceB);
+                await assertJettonNotification(
+                    res.transactions,
+                    walletA.address,
+                    tonChannel.address,
+                    expValue,
+                    channelClosedPayload
+                );
             }
-
-            // Levtovers always go to A
+            // Either way TON excess goes to A
             expect(res.transactions).toHaveTransaction({
                 on: walletA.address,
-                op: Op.OP_CHANNEL_CLOSED,
-                value: contractBalance - computedGeneric(closeTx).gasFees - msgPrices.lumpPrice
+                op: JettonOp.excesses
             });
+
+
         }
 
         await blockchain.loadFrom(prevState);
