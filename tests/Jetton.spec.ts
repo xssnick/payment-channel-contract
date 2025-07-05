@@ -40,8 +40,10 @@ describe('PaymentChannel', () => {
     let keysA: KeyPair
     let keysB: KeyPair
 
-    let feeMinBalance = toNano('0.01') + toNano('0.08') * 2n + toNano('0.03');
     let feeJettonAccept = toNano('0.035');
+    let feeJettonPayout = toNano('0.08');
+    let commitFee = toNano('0.03');
+    let feeMinBalance = toNano('0.01') + feeJettonPayout * 2n + toNano('0.03');
 
     let channelClosedPayload: Cell;
 
@@ -627,8 +629,8 @@ describe('PaymentChannel', () => {
     it('should allow to withdraw and send via cooperative commit', async () => {
         let dataBefore = await tonChannel.getChannelData();
 
-        // const msgValue  = toNano('0.05');
-        const msgValue  = toNano('1');
+        const msgValue  = commitFee + feeJettonPayout * 2n;
+        // const msgValue  = toNano('1');
 
         const withdrawA = dataBefore.balance.depositA / BigInt(getRandomInt(10, 100));
         const withdrawB = dataBefore.balance.depositB / BigInt(getRandomInt(10, 100));
@@ -779,6 +781,7 @@ describe('PaymentChannel', () => {
     });
     it('should not allow to withdraw more than on a balance', async () => {
         let dataBefore = await tonChannel.getChannelData();
+        let msgValue   = commitFee + feeJettonPayout;
 
         const {sentA, sentB} = calcSends(dataBefore);
 
@@ -809,7 +812,7 @@ describe('PaymentChannel', () => {
                 commit: balanceCommit,
                 sigA,
                 sigB
-            });
+            }, msgValue);
             expect(res.transactions).toHaveTransaction({
                 on: tonChannel.address,
                 from: walletA.address,
@@ -931,6 +934,94 @@ describe('PaymentChannel', () => {
                     aborted: true,
                     exitCode: Errors.ERROR_WRONG_CHANNEL_ID
                 });
+            }
+        }
+    });
+    it('should reject cooperative commit with value below commit fee', async () => {
+        const dataBefore = await tonChannel.getChannelData();
+        const {sentA, sentB} = calcSends(dataBefore);
+
+        const justSeqno: BalanceCommit = {
+            withdrawA: dataBefore.balance.withdrawA,
+            withdrawB: dataBefore.balance.withdrawB,
+            seqnoA: dataBefore.seqnoA + 1n,
+            seqnoB: dataBefore.seqnoB + 1n,
+            sentA,
+            sentB
+        };
+        const singleWithdrawA: BalanceCommit = {
+            ...justSeqno,
+            withdrawA: dataBefore.balance.withdrawA + 1n
+        }
+        const singleWithdrawB: BalanceCommit = {
+            ...justSeqno,
+            withdrawB: dataBefore.balance.withdrawB + 1n
+        }
+        const withdrawBoth: BalanceCommit = {
+            ...justSeqno,
+            withdrawA: dataBefore.balance.withdrawA + 1n,
+            withdrawB: dataBefore.balance.withdrawB + 1n,
+        }
+
+
+        let testCases: {
+            value: bigint,
+            data: BalanceCommit
+        }[] = [
+            {
+                value: commitFee,
+                data: justSeqno
+            },
+            {
+                value: commitFee + feeJettonPayout,
+                data: singleWithdrawA
+            },
+            {
+                value: commitFee + feeJettonPayout,
+                data: singleWithdrawB
+            },
+            {
+                value: commitFee + feeJettonPayout * 2n,
+                data: withdrawBoth
+            }
+        ];
+
+        const prevState = blockchain.snapshot();
+
+        for(let testCase of testCases) {
+            const commitBody = PaymentChannel.cooperativeCommitBody(testCase.data, tonChannelConfig.id);
+            const sigA = await signCell(commitBody, keysA.secretKey);
+            const sigB = await signCell(commitBody, keysB.secretKey);
+
+            for(let testWallet of [walletA, walletB]) {
+                let res = await tonChannel.sendCooperativeCommit(testWallet.getSender(), {
+                    commit: commitBody,
+                    sigA,
+                    sigB
+                }, testCase.value - 1n);
+
+                expect(res.transactions).toHaveTransaction({
+                    on: tonChannel.address,
+                    from: testWallet.address,
+                    op: Op.OP_COOPERATIVE_COMMIT,
+                    aborted: true,
+                    exitCode: Errors.ERROR_AMOUNT_NOT_COVERS_FEE
+                });
+
+                res = await tonChannel.sendCooperativeCommit(testWallet.getSender(), {
+                    commit: commitBody,
+                    sigA,
+                    sigB
+                }, testCase.value);
+
+                expect(res.transactions).toHaveTransaction({
+                    on: tonChannel.address,
+                    from: testWallet.address,
+                    op: Op.OP_COOPERATIVE_COMMIT,
+                    aborted: false,
+                });
+
+                await blockchain.loadFrom(prevState);
             }
         }
     });

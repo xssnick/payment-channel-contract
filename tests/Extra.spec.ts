@@ -35,7 +35,8 @@ describe('PaymentChannel Extra', () => {
     let keysB: KeyPair
 
     let depoFee = toNano('0.025');
-    let feeEcPayout = toNano('0.03');
+    let commitFee     = toNano('0.03');
+    let feeEcPayout   = toNano('0.03');
     let feeMinBalance = toNano('0.01') + feeEcPayout * 2n;
 
     let extraId = getRandomInt(1, 100_000_000);
@@ -515,7 +516,7 @@ describe('PaymentChannel Extra', () => {
         let dataBefore = await tonChannel.getChannelData();
 
         // const msgValue  = toNano('0.03');
-        const msgValue  = toNano('1');
+        const msgValue  = commitFee + feeEcPayout * 2n;
 
         const withdrawA = dataBefore.balance.depositA / BigInt(getRandomInt(10, 100));
         const withdrawB = dataBefore.balance.depositB / BigInt(getRandomInt(10, 100));
@@ -829,6 +830,94 @@ describe('PaymentChannel Extra', () => {
                     aborted: true,
                     exitCode: Errors.ERROR_WRONG_CHANNEL_ID
                 });
+            }
+        }
+    });
+    it('should reject cooperative commit with value below commit fee', async () => {
+        const dataBefore = await tonChannel.getChannelData();
+        const {sentA, sentB} = calcSends(dataBefore);
+
+        const justSeqno: BalanceCommit = {
+            withdrawA: dataBefore.balance.withdrawA,
+            withdrawB: dataBefore.balance.withdrawB,
+            seqnoA: dataBefore.seqnoA + 1n,
+            seqnoB: dataBefore.seqnoB + 1n,
+            sentA,
+            sentB
+        };
+        const singleWithdrawA: BalanceCommit = {
+            ...justSeqno,
+            withdrawA: dataBefore.balance.withdrawA + 1n
+        }
+        const singleWithdrawB: BalanceCommit = {
+            ...justSeqno,
+            withdrawB: dataBefore.balance.withdrawB + 1n
+        }
+        const withdrawBoth: BalanceCommit = {
+            ...justSeqno,
+            withdrawA: dataBefore.balance.withdrawA + 1n,
+            withdrawB: dataBefore.balance.withdrawB + 1n,
+        }
+
+
+        let testCases: {
+            value: bigint,
+            data: BalanceCommit
+        }[] = [
+            {
+                value: commitFee,
+                data: justSeqno
+            },
+            {
+                value: commitFee + feeEcPayout,
+                data: singleWithdrawA
+            },
+            {
+                value: commitFee + feeEcPayout,
+                data: singleWithdrawB
+            },
+            {
+                value: commitFee + feeEcPayout * 2n,
+                data: withdrawBoth
+            }
+        ];
+
+        const prevState = blockchain.snapshot();
+
+        for(let testCase of testCases) {
+            const commitBody = PaymentChannel.cooperativeCommitBody(testCase.data, tonChannelConfig.id);
+            const sigA = await signCell(commitBody, keysA.secretKey);
+            const sigB = await signCell(commitBody, keysB.secretKey);
+
+            for(let testWallet of [walletA, walletB]) {
+                let res = await tonChannel.sendCooperativeCommit(testWallet.getSender(), {
+                    commit: commitBody,
+                    sigA,
+                    sigB
+                }, testCase.value - 1n);
+
+                expect(res.transactions).toHaveTransaction({
+                    on: tonChannel.address,
+                    from: testWallet.address,
+                    op: Op.OP_COOPERATIVE_COMMIT,
+                    aborted: true,
+                    exitCode: Errors.ERROR_AMOUNT_NOT_COVERS_FEE
+                });
+
+                res = await tonChannel.sendCooperativeCommit(testWallet.getSender(), {
+                    commit: commitBody,
+                    sigA,
+                    sigB
+                }, testCase.value);
+
+                expect(res.transactions).toHaveTransaction({
+                    on: tonChannel.address,
+                    from: testWallet.address,
+                    op: Op.OP_COOPERATIVE_COMMIT,
+                    aborted: false,
+                });
+
+                await blockchain.loadFrom(prevState);
             }
         }
     });

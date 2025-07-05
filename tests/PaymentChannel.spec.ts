@@ -35,6 +35,7 @@ describe('PaymentChannel', () => {
     let keysB: KeyPair
 
     let depoFee = toNano('0.03');
+    let commitFee = toNano('0.03');
     let feeMinBalance = toNano('0.01');
 
     let calcSends = (data: ChannelData) => {
@@ -396,7 +397,7 @@ describe('PaymentChannel', () => {
     it('should allow to withdraw and send via cooperative commit', async () => {
         let dataBefore = await tonChannel.getChannelData();
 
-        const msgValue  = toNano('0.03');
+        const msgValue  = commitFee;
 
         const withdrawA = dataBefore.balance.depositA / BigInt(getRandomInt(10, 100));
         const withdrawB = dataBefore.balance.depositB / BigInt(getRandomInt(10, 100));
@@ -702,6 +703,115 @@ describe('PaymentChannel', () => {
                     exitCode: Errors.ERROR_WRONG_CHANNEL_ID
                 });
             }
+        }
+    });
+    it('should reject cooperative commit with value below commit fee', async () => {
+        const dataBefore = await tonChannel.getChannelData();
+        const {sentA, sentB} = calcSends(dataBefore);
+        const withdrawAmount = BigInt(getRandomInt(1, 5)) * toNano('0.001');
+
+        const justSeqno: BalanceCommit = {
+            withdrawA: dataBefore.balance.withdrawA,
+            withdrawB: dataBefore.balance.withdrawB,
+            seqnoA: dataBefore.seqnoA + 1n,
+            seqnoB: dataBefore.seqnoB + 1n,
+            sentA,
+            sentB
+        };
+        const singleWithdrawA: BalanceCommit = {
+            ...justSeqno,
+            withdrawA: dataBefore.balance.withdrawA + withdrawAmount
+        }
+        const singleWithdrawB: BalanceCommit = {
+            ...justSeqno,
+            withdrawB: dataBefore.balance.withdrawB + withdrawAmount
+        }
+        const withdrawBoth: BalanceCommit = {
+            ...justSeqno,
+            withdrawA: dataBefore.balance.withdrawA + withdrawAmount,
+            withdrawB: dataBefore.balance.withdrawB + withdrawAmount,
+        }
+
+
+        let testCases: BalanceCommit[] = [
+            justSeqno,
+            singleWithdrawA,
+            singleWithdrawB,
+            withdrawBoth
+        ];
+
+        const prevState = blockchain.snapshot();
+
+        for(let testCase of testCases) {
+            const commitBody = PaymentChannel.cooperativeCommitBody(testCase, tonChannelConfig.id);
+            const sigA = await signCell(commitBody, keysA.secretKey);
+            const sigB = await signCell(commitBody, keysB.secretKey);
+
+            for(let testWallet of [walletA, walletB]) {
+                let res = await tonChannel.sendCooperativeCommit(testWallet.getSender(), {
+                    commit: commitBody,
+                    sigA,
+                    sigB
+                }, commitFee - 1n);
+
+                expect(res.transactions).toHaveTransaction({
+                    on: tonChannel.address,
+                    from: testWallet.address,
+                    op: Op.OP_COOPERATIVE_COMMIT,
+                    aborted: true,
+                    exitCode: Errors.ERROR_AMOUNT_NOT_COVERS_FEE
+                });
+
+                res = await tonChannel.sendCooperativeCommit(testWallet.getSender(), {
+                    commit: commitBody,
+                    sigA,
+                    sigB
+                }, commitFee);
+
+                expect(res.transactions).toHaveTransaction({
+                    on: tonChannel.address,
+                    from: testWallet.address,
+                    op: Op.OP_COOPERATIVE_COMMIT,
+                    aborted: false,
+                });
+
+                await blockchain.loadFrom(prevState);
+            }
+        }
+    });
+    it.skip('should reject cooperative commit with value below commit fee', async () => {
+        const dataBefore = await tonChannel.getChannelData();
+        const {sentA, sentB} = calcSends(dataBefore);
+
+        const testCommit: BalanceCommit = {
+            withdrawA: dataBefore.balance.withdrawA,
+            withdrawB: dataBefore.balance.withdrawB,
+            seqnoA: dataBefore.seqnoA + 1n,
+            seqnoB: dataBefore.seqnoB + 1n,
+            sentA,
+            sentB
+        };
+
+        const commitBody = PaymentChannel.cooperativeCommitBody(testCommit, tonChannelConfig.id);
+
+        const sigA = await signCell(commitBody, keysA.secretKey);
+        const sigB = await signCell(commitBody, keysB.secretKey);
+
+        const msgValue = commitFee - 1n;
+
+        for(let testWallet of [walletA, walletB]) {
+            const res = await tonChannel.sendCooperativeCommit(testWallet.getSender(), {
+                commit: testCommit,
+                sigA,
+                sigB
+            }, msgValue);
+            expect(res.transactions).toHaveTransaction({
+                on: tonChannel.address,
+                from: testWallet.address,
+                op: Op.OP_COOPERATIVE_COMMIT,
+                aborted: true,
+                exitCode: Errors.ERROR_AMOUNT_NOT_COVERS_FEE
+            });
         }
     });
     it('should not accept cooperative commit signed body for cooperative close', async () => {
