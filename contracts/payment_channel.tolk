@@ -412,8 +412,9 @@ fun onInternalMessage(_: int, amount: int, inMsgFull: cell, inMsg: slice) {
             assert(amount >= FEE_EC_ACCEPT) throw ERROR_AMOUNT_NOT_COVERS_FEE;
 
             var ec: dict = cs.loadDict();
-            var (v: slice?, ok: bool) = ec.uDictGet(32, channel.paymentConfig.ecId);
-            assert(ok) throw ERROR_INVALID_EC_ID;
+            var (v: slice?, ok: bool) = ec.uDictDeleteAndGet(32, channel.paymentConfig.ecId);
+            // If dictionary contains more than one EC - reject
+            assert(ok && ec == null) throw ERROR_INVALID_EC_ID;
 
             var ecAmount: int = v!.loadVarUInt32();
             channel.topUpBalance(ecAmount, inMsg);
