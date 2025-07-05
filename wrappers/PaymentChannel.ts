@@ -340,7 +340,7 @@ export class PaymentChannel implements Contract {
                 .storeRef(sigBCell)
                .endCell();
     }
-    async sendCooperativeCommit(provider: ContractProvider, via: Sender, commit: SignedCommit, value: bigint = toNano('0.05'), channelId?: bigint) {
+    async sendCooperativeCommit(provider: ContractProvider, via: Sender, commit: SignedCommit, value: bigint = toNano('0.1'), channelId?: bigint) {
         const curId = channelId ?? this.channelId;
         if(!curId) {
             throw new Error("Channel id is required");
