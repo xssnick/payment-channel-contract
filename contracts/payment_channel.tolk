@@ -53,13 +53,22 @@ fun initChannel(channel: Channel, msg: slice) {
 
 @inline_ref
 fun sendPayout(config: PaymentConfig, sAddr: slice, amount: int, channelId: int, op: int, flags: int) {
-    if (config.currencyType == CURRENCY_TYPE_TON) {
-        sendPayoutTon(sAddr, amount, channelId, op, flags);
-    } else if (config.currencyType == CURRENCY_TYPE_JETTON) {
-        sendPayoutJetton(config.jettonWallet, sAddr, amount, channelId, op, flags);
-    } else if (config.currencyType == CURRENCY_TYPE_EC) {
-        sendPayoutEC(config.ecId, sAddr, amount, channelId, op, flags);
-    }
+
+    return match(config.currencyType) {
+        CURRENCY_TYPE_TON => {
+            sendPayoutTon(sAddr, amount, channelId, op, flags);
+            return 0;
+        }
+        CURRENCY_TYPE_JETTON => {
+            sendPayoutJetton(config.jettonWallet, sAddr, amount, channelId, op, flags);
+            return FEE_JETTON_PAYOUT;
+        }
+        CURRENCY_TYPE_EC => {
+            sendPayoutEC(config.ecId, sAddr, amount, channelId, op, flags);
+            return FEE_EC_PAYOUT;
+        }
+        else => 0
+    };
 }
 
 @inline
@@ -180,7 +189,7 @@ fun Channel.cooperativeClose(mutate self, msg: slice) {
 }
 
 @inline_ref
-fun Channel.cooperativeCommit(mutate self, msg: slice) {
+fun Channel.cooperativeCommit(mutate self, msg: slice, msgValue: int) {
     var sigA: slice = msg.loadRef().beginParse();
     var sigB: slice = msg.loadRef().beginParse();
     var hash: int = msg.hash();
@@ -220,16 +229,17 @@ fun Channel.cooperativeCommit(mutate self, msg: slice) {
     assert(withdrawAmount >= 0) throw ERROR_WITHDRAW_REGRESS;
     if (withdrawAmount > 0) {
         self.balance.withdrawB = withdrawB;
-        sendPayout(self.paymentConfig, self.paymentConfig.addressB, withdrawAmount, self.id, OP_CHANNEL_WITHDRAW, 0);
+        msgValue -= sendPayout(self.paymentConfig, self.paymentConfig.addressB, withdrawAmount, self.id, OP_CHANNEL_WITHDRAW, 0);
     }
 
     withdrawAmount = withdrawA - self.balance.withdrawA;
     assert(withdrawAmount >= 0) throw ERROR_WITHDRAW_REGRESS;
     if (withdrawAmount > 0) {
         self.balance.withdrawA = withdrawA;
-        sendPayout(self.paymentConfig,self.paymentConfig.addressA, withdrawAmount, self.id, OP_CHANNEL_WITHDRAW, 0);
+        msgValue -= sendPayout(self.paymentConfig,self.paymentConfig.addressA, withdrawAmount, self.id, OP_CHANNEL_WITHDRAW, 0);
     }
 
+    assert(msgValue >= 0) throw ERROR_AMOUNT_NOT_COVERS_FEE;
     assert(self.balance.calcA() >= 0 && self.balance.calcB() >= 0) throw ERROR_NOT_ENOUGH_BALANCE;
 
     contract.setData(self.serialize());
@@ -429,7 +439,7 @@ fun onInternalMessage(_: int, amount: int, inMsgFull: cell, inMsg: slice) {
         // no excess
         return assignJettonWallet(channel, sender, inMsg);
     } else if (op == OP_COOPERATIVE_COMMIT) {
-        channel.cooperativeCommit(inMsg);
+        channel.cooperativeCommit(inMsg, amount - FEE_COMMIT);
     } else if (op == OP_INIT_CHANNEL) {
         initChannel(channel, inMsg);
     } else if (op == OP_COOPERATIVE_CLOSE) {
