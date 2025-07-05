@@ -1,3 +1,6 @@
+import "errors.tolk"
+import "messages.tolk"
+
 @pure
 fun cell.isUdictReplaceGet(self, keyLen: int, index: int, value: slice): (cell, slice, int)
     asm(value index self keyLen) "DICTUREPLACEGET" "NULLSWAPIFNOT";
@@ -55,12 +58,12 @@ struct ClosureConfig {
 
 struct PaymentConfig {
     storageFee: coins;
-    addressA: slice;
-    addressB: slice;
+    addressA: address;
+    addressB: address;
     currencyType: int;
     ecId: uint32;
-    jettonRoot: slice;
-    jettonWallet: slice;
+    jettonRoot: address;
+    jettonWallet: address;
 
     ref: cell;
 }
@@ -88,62 +91,10 @@ struct Channel {
     paymentConfig: PaymentConfig;
 }
 
-const ERROR_ALREADY_INITED = 100;
-const ERROR_NOT_AUTHORIZED = 101;
-const ERROR_INCORRECT_INITIAL_BALANCE = 102;
-const ERROR_WRONG_TAG = 104;
-const ERROR_OUTDATED_STATE = 105;
-const ERROR_QUARANTINE_ALREADY_ACTIVE = 106;
-const ERROR_NO_QUARANTINED_STATE = 107;
-const ERROR_SEQNO_REGRESS = 108;
-const ERROR_UNAUTHORIZED_CHALLENGE = 109;
-const ERROR_QUARANTINE_NOT_FINISHED = 110;
-const ERROR_TOO_LATE_FOR_QUARANTINE_CHALLENGE = 111;
-const ERROR_TOO_LATE_TO_SETTLE_CONDITIONALS = 112;
-const ERROR_TOO_EARLY_TO_CLOSE = 113;
-const ERROR_WRONG_CHANNEL_ID = 114;
-const ERROR_INCORRECT_CONDITIONALS_PROOF = 115;
-const ERROR_INCORRECT_UPDATED_PROOF = 116;
-const ERROR_NOT_INITED = 117;
-const ERROR_NOT_ENOUGH_BALANCE = 118;
-const ERROR_AMOUNT_NOT_COVERS_FEE = 119;
-const ERROR_INVALID_CURRENCY_TYPE = 120;
-const ERROR_INVALID_EC_ID = 121;
-const ERROR_NOT_ENOUGH_CONTRACT_BALANCE = 122;
-const ERROR_NOT_ENOUGH_MONEY_FOR_INIT_STORAGE = 123;
-const ERROR_JETTON_WALLET_ALREADY_INSTALLED = 124;
-const ERROR_QUARANTINEE_ALREADY_CHALLENGED = 125;
-const ERROR_INCORRECT_SUMMARIZED_BALANCE = 126;
-const ERROR_WITHDRAW_REGRESS = 127;
-
 const STORAGE_FULL = 4;
 const STORAGE_UP_TO_QUARANTINE = 3;
 const STORAGE_UP_TO_CLOSURE_CONFIG = 1;
 const STORAGE_BALANCES_AND_KEYS = 0;
-
-const OP_TOP_UP_BALANCE = 0x593e3893;
-const OP_INIT_CHANNEL = 0x79ae99b5;
-const OP_COOPERATIVE_CLOSE = 0xd2b1eeeb;
-const OP_COOPERATIVE_COMMIT = 0x076bfdf1;
-const OP_START_UNCOOPERATIVE_CLOSE = 0x8175e15d;
-const OP_CHALLENGE_QUARANTINEED_STATE = 0x9a77c0db;
-const OP_SETTLE_CONDITIONALS = 0x56c39b4c;
-const OP_FINISH_UNCOOPERATIVE_CLOSE = 0x25432a91;
-const OP_CHANNEL_CLOSED = 0xdddc88ba;
-const OP_CHANNEL_WITHDRAW = 0xa32f0b3c;
-const OP_JETTON_TRANSFER = 0xf8a7ea5;
-const OP_JETTON_TAKE_WALLET_ADDRESS = 0xd1735400;
-const OP_JETTON_PROVIDE_WALLET_ADDRESS = 0x2c76b973;
-const OP_JETTON_TRANSFER_NOTIFICATION = 0x7362d09c;
-const OP_EXCESSES = 0xd53276db;
-
-const TAG_INIT_CHANNEL = 0x481ebc44;
-const TAG_COOPERATIVE_CLOSE = 0x8243e9a3;
-const TAG_COOPERATIVE_COMMIT = 0x4a390cac;
-const TAG_START_UNCOOPERATIVE_CLOSE = 0x8c623692;
-const TAG_CHALLENGE_QUARANTINEED_STATE = 0xb8a21379;
-const TAG_SETTLE_CONDITIONALS = 0x14588aab;
-const TAG_STATE = 0x43685374;
 
 const STATE_UNINITED = 0;
 const STATE_OPEN = 1;
@@ -151,15 +102,15 @@ const STATE_CLOSURE_STARTED = 2;
 const STATE_SETTLING_CONDITIONALS = 3;
 const STATE_AWAITING_FINALIZATION = 4;
 
-const FEE_JETTON_ACCEPT  = 35000000; // 0.035
-const FEE_JETTON_PAYOUT  = 80000000; // 0.08
-const FEE_JETTON_FORWARD = 35000000; // 0.03
-const FEE_EC_ACCEPT      = 25000000; // 0.025
-const FEE_EC_PAYOUT      = 30000000; // 0.03
-const FEE_TON_ACCEPT     = 30000000; // 0.03
-const FEE_MIN_BALANCE    = 10000000; // 0.01
-const FEE_COMMIT         = 30000000; // 0.03
-const FEE_JETTON_WALLET_PROVIDE = 30000000; // 0.03
+const FEE_JETTON_ACCEPT  = ton("0.035"); // 0.035
+const FEE_JETTON_PAYOUT  = ton("0.08"); // 0.08
+const FEE_JETTON_FORWARD = ton("0.03"); // 0.03
+const FEE_EC_ACCEPT      = ton("0.025"); // 0.025
+const FEE_EC_PAYOUT      = ton("0.03"); // 0.03
+const FEE_TON_ACCEPT     = ton("0.03"); // 0.03
+const FEE_MIN_BALANCE    = ton("0.01"); // 0.01
+const FEE_COMMIT         = ton("0.03"); // 0.03
+const FEE_JETTON_WALLET_PROVIDE = ton("0.03"); // 0.03
 
 const CURRENCY_TYPE_TON = 0;
 const CURRENCY_TYPE_EC = 1;
@@ -223,12 +174,12 @@ fun PaymentConfig.serialize(self): cell {
 fun PaymentConfig.update(mutate self) {
     self.ref = beginCell()
         .storeCoins(self.storageFee)
-        .storeSlice(self.addressA)
-        .storeSlice(self.addressB)
+        .storeAddress(self.addressA)
+        .storeAddress(self.addressB)
         .storeUint(3, 2) // jetton type
         .storeRef(beginCell()
-        .storeSlice(self.jettonRoot)
-        .storeSlice(self.jettonWallet)
+        .storeAddress(self.jettonRoot)
+        .storeAddress(self.jettonWallet)
         .endCell())
         .endCell();
 }

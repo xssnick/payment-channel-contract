@@ -1,0 +1,66 @@
+const OP_TOP_UP_BALANCE = 0x593e3893;
+const OP_INIT_CHANNEL = 0x79ae99b5;
+const OP_COOPERATIVE_CLOSE = 0xd2b1eeeb;
+const OP_COOPERATIVE_COMMIT = 0x076bfdf1;
+const OP_START_UNCOOPERATIVE_CLOSE = 0x8175e15d;
+const OP_CHALLENGE_QUARANTINEED_STATE = 0x9a77c0db;
+const OP_SETTLE_CONDITIONALS = 0x56c39b4c;
+const OP_FINISH_UNCOOPERATIVE_CLOSE = 0x25432a91;
+const OP_CHANNEL_CLOSED = 0xdddc88ba;
+const OP_CHANNEL_WITHDRAW = 0xa32f0b3c;
+const OP_JETTON_TRANSFER = 0xf8a7ea5;
+const OP_JETTON_TAKE_WALLET_ADDRESS = 0xd1735400;
+const OP_JETTON_PROVIDE_WALLET_ADDRESS = 0x2c76b973;
+const OP_JETTON_TRANSFER_NOTIFICATION = 0x7362d09c;
+const OP_EXCESSES = 0xd53276db;
+
+// Message tags
+const TAG_INIT_CHANNEL = 0x481ebc44;
+const TAG_COOPERATIVE_CLOSE = 0x8243e9a3;
+const TAG_COOPERATIVE_COMMIT = 0x4a390cac;
+const TAG_START_UNCOOPERATIVE_CLOSE = 0x8c623692;
+const TAG_CHALLENGE_QUARANTINEED_STATE = 0xb8a21379;
+const TAG_SETTLE_CONDITIONALS = 0x14588aab;
+const TAG_STATE = 0x43685374;
+
+
+type ForwardPayloadRemainder = RemainingBitsAndRefs;
+
+struct (0xa32f0b3c) WithdrawNotification {
+	channelId: uint128
+}
+
+struct (0xdddc88ba) ChannelClosedNotification {
+	channelId: uint128
+}
+
+type PayoutMessage = WithdrawNotification | ChannelClosedNotification;
+
+struct (0x0f8a7ea5) AskToTransfer {
+    queryId: uint64,
+    jettonAmount: coins,
+    transferRecipient: address,
+    sendExcessesTo: address,
+    customPayload: cell?,
+    forwardTonAmount: coins,
+    forwardPayload: builder | cell?
+}
+
+struct (0x7362d09c) TransferNotificationForRecipient {
+    queryId: uint64,
+    jettonAmount: coins,
+    transferInitiator: address,
+    forwardPayload: ForwardPayloadRemainder
+}
+
+struct (0x2c76b973) ProvideWalletAddress {
+    queryId: uint64,
+    ownerAddress: address,
+    include_address: bool
+}
+
+struct PayoutResult {
+    msg: OutMessage,
+    fee: int
+}
+

@@ -3,6 +3,8 @@ import "@stdlib/gas-payments"
 import "@stdlib/tvm-dicts"
 import "@stdlib/tvm-lowlevel"
 import "types.tolk"
+import "errors.tolk"
+import "messages.tolk"
 
 fun Channel.topUpBalance(mutate self, amount: int, msg: slice) {
     assert(self.inited) throw ERROR_NOT_INITED;
@@ -36,9 +38,9 @@ fun initChannel(channel: Channel, msg: slice) {
     if (channel.paymentConfig.currencyType == CURRENCY_TYPE_JETTON) {
         // must keep fee for final withdrawal
         storageMin += (FEE_JETTON_PAYOUT * 2) + FEE_JETTON_WALLET_PROVIDE;
-        if (addressIsNone(channel.paymentConfig.jettonWallet)) {
+        if (channel.paymentConfig.jettonWallet.isNone()) {
             // request our wallet address from jetton master
-            requestJettonWallet(channel);
+            requestJettonWallet(channel.paymentConfig.jettonRoot);
         }
     } else if (channel.paymentConfig.currencyType == CURRENCY_TYPE_EC) {
         storageMin += FEE_EC_PAYOUT * 2;
@@ -52,27 +54,36 @@ fun initChannel(channel: Channel, msg: slice) {
 }
 
 @inline_ref
-fun sendPayout(config: PaymentConfig, sAddr: slice, amount: int, channelId: int, op: int, flags: int) {
+fun sendPayout(config: PaymentConfig, sAddr: address, amount: int, payload: builder, flags: int) {
 
-    return match(config.currencyType) {
-        CURRENCY_TYPE_TON => {
-            sendPayoutTon(sAddr, amount, channelId, op, flags);
-            return 0;
-        }
-        CURRENCY_TYPE_JETTON => {
-            sendPayoutJetton(config.jettonWallet, sAddr, amount, channelId, op, flags);
-            return FEE_JETTON_PAYOUT;
-        }
-        CURRENCY_TYPE_EC => {
-            sendPayoutEC(config.ecId, sAddr, amount, channelId, op, flags);
-            return FEE_EC_PAYOUT;
-        }
-        else => 0
+    var payout = match(config.currencyType) {
+        CURRENCY_TYPE_TON => PayoutResult {
+                    msg: createMessage({
+                            bounce: false,
+                            dest: sAddr,
+                            value: amount,
+                            body: payload
+                        }),
+                    fee: 0
+        },
+        CURRENCY_TYPE_JETTON => PayoutResult {
+                msg: createPayoutJetton(config.jettonWallet, sAddr, amount, payload, flags),
+                fee: FEE_JETTON_PAYOUT
+        },
+        CURRENCY_TYPE_EC => PayoutResult {
+                msg: createPayoutEC(config.ecId, sAddr, amount, payload, flags),
+                fee: FEE_EC_PAYOUT
+        },
+        else => throw(42)
     };
+
+    payout.msg.send(flags);
+    return payout.fee;
 }
 
+/*
 @inline
-fun sendPayoutTon(sAddr: slice, amount: int, channelId: int, op: int, flags: int) {
+fun sendPayoutTon(sAddr: slice, amount: int, channelId: int, payload: WithdrawNotification | ChannelClosedNotification, flags: int) {
     sendMessage(
         beginCell()
             .storeUint(NON_BOUNCEABLE, 6)
@@ -85,14 +96,22 @@ fun sendPayoutTon(sAddr: slice, amount: int, channelId: int, op: int, flags: int
         flags
     );
 }
+*/
 
 @inline
-fun sendPayoutEC(ecId: int, sAddr: slice, amount: int, channelId: int, op: int, flags: int) {
+fun createPayoutEC(ecId: int, sAddr: address, amount: int, payoutBody: builder, flags: int) {
     var currenciesToSend: dict = createEmptyDict();
     if(amount > 0) {
         currenciesToSend.uDictSetBuilder(32, ecId, beginCell().storeVarUInt32(amount));
     }
+    return createMessage({
+        bounce: false,
+        dest: sAddr,
+        value: (FEE_EC_PAYOUT, currenciesToSend),
+        body: payoutBody
+    });
 
+    /*
     sendMessage(
         beginCell()
             .storeUint(NON_BOUNCEABLE, 6)
@@ -105,16 +124,33 @@ fun sendPayoutEC(ecId: int, sAddr: slice, amount: int, channelId: int, op: int, 
         .endCell(),
         flags
     );
+    */
 }
 
 @inline
-fun sendPayoutJetton(wallet: slice, sAddr: slice, amount: int, channelId: int, op: int, flags: int) {
+fun createPayoutJetton(wallet: address, sAddr: address, amount: int, payload: builder, flags: int) {
     /*
       transfer query_id:uint64 amount:(VarUInteger 16) destination:MsgAddress
                response_destination:MsgAddress custom_payload:(Maybe ^Cell)
                forward_ton_amount:(VarUInteger 16) forward_payload:(Either Cell ^Cell)
                = InternalMsgBody; 32 + 64 + 124 + 267 + 267 + 1 + 5  + 1
     */
+    return createMessage({
+        bounce: false,
+        dest: wallet,
+        value: FEE_JETTON_PAYOUT,
+        body: AskToTransfer {
+                queryId: 0,
+                jettonAmount: amount,
+                customPayload: null,
+                transferRecipient: sAddr,
+                sendExcessesTo: sAddr,
+                forwardTonAmount: FEE_JETTON_FORWARD,
+                forwardPayload: payload
+        }
+    });
+
+    /*
     sendMessage(
         beginCell()
             .storeUint(NON_BOUNCEABLE, 6)
@@ -137,12 +173,17 @@ fun sendPayoutJetton(wallet: slice, sAddr: slice, amount: int, channelId: int, o
         .endCell(),
         flags
     );
+    */
 }
 
 fun Channel.closeChannel(mutate self) {
-    sendPayout(self.paymentConfig, self.paymentConfig.addressB, self.balance.calcB(), self.id, OP_CHANNEL_CLOSED, SEND_MODE_IGNORE_ERRORS);
+    var closeMsg = beginCell().storeAny(ChannelClosedNotification {
+        channelId: self.id
+    });
+
+    sendPayout(self.paymentConfig, self.paymentConfig.addressB, self.balance.calcB(), closeMsg, SEND_MODE_IGNORE_ERRORS);
     // side A is considered to be deployer, so he will get rest contract's ton balance
-    sendPayout(self.paymentConfig, self.paymentConfig.addressA, self.balance.calcA(), self.id, OP_CHANNEL_CLOSED, SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS);
+    sendPayout(self.paymentConfig, self.paymentConfig.addressA, self.balance.calcA(), closeMsg, SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS);
 
     // while self contract will be emptied it will survive for some time
     // by clearing storage we allow immediately reopen self with the same configs
@@ -229,14 +270,21 @@ fun Channel.cooperativeCommit(mutate self, msg: slice, msgValue: int) {
     assert(withdrawAmount >= 0) throw ERROR_WITHDRAW_REGRESS;
     if (withdrawAmount > 0) {
         self.balance.withdrawB = withdrawB;
-        msgValue -= sendPayout(self.paymentConfig, self.paymentConfig.addressB, withdrawAmount, self.id, OP_CHANNEL_WITHDRAW, 0);
+        var withdrawMsg = beginCell().storeAny(WithdrawNotification {
+            channelId: self.id
+        });
+        msgValue -= sendPayout(self.paymentConfig, self.paymentConfig.addressB, withdrawAmount, withdrawMsg, 0);
     }
 
     withdrawAmount = withdrawA - self.balance.withdrawA;
     assert(withdrawAmount >= 0) throw ERROR_WITHDRAW_REGRESS;
     if (withdrawAmount > 0) {
         self.balance.withdrawA = withdrawA;
-        msgValue -= sendPayout(self.paymentConfig,self.paymentConfig.addressA, withdrawAmount, self.id, OP_CHANNEL_WITHDRAW, 0);
+        var withdrawMsg = beginCell().storeAny(WithdrawNotification {
+            channelId: self.id
+        });
+
+        msgValue -= sendPayout(self.paymentConfig,self.paymentConfig.addressA, withdrawAmount, withdrawMsg, 0);
     }
 
     assert(msgValue >= 0) throw ERROR_AMOUNT_NOT_COVERS_FEE;
@@ -412,7 +460,7 @@ fun onInternalMessage(_: int, amount: int, inMsgFull: cell, inMsg: slice) {
         // bounced
         return;
     }
-    var sender: slice = cs.loadAddress();
+    var sender: address = cs.loadAddress();
 
     // Note, operators of channels are always off-chain parties, not contracts
     // thus no responses and query_ids
@@ -463,7 +511,7 @@ fun onInternalMessage(_: int, amount: int, inMsgFull: cell, inMsg: slice) {
 }
 
 @inline_ref
-fun acceptJettons(channel: Channel, sender: slice, tonAmount: int, payload: slice) {
+fun acceptJettons(channel: Channel, sender: address, tonAmount: int, payload: slice) {
     /* TEP-74
       transfer_notification#7362d09c query_id:uint64 amount:(VarUInteger 16)
                                      sender:MsgAddress forward_payload:(Either Cell ^Cell)
@@ -474,7 +522,7 @@ fun acceptJettons(channel: Channel, sender: slice, tonAmount: int, payload: slic
     payload.skipBits(64);
     var jettonAmount: int = payload.loadCoins();
 
-    var jettonSender: slice = payload.loadAddress();
+    var jettonSender: address = payload.loadAddress();
     var eitherForwardPayload: bool = payload.loadBool();
     var forwardPayload: slice = eitherForwardPayload ? payload.loadRef().beginParse() : payload;
 
@@ -495,13 +543,30 @@ fun acceptJettons(channel: Channel, sender: slice, tonAmount: int, payload: slic
 }
 
 @inline_ref
-fun sendJettonsBack(dest: slice, amount: int, jettonWallet: slice) {
+fun sendJettonsBack(dest: address, amount: int, jettonWallet: address) {
     /*
       transfer query_id:uint64 amount:(VarUInteger 16) destination:MsgAddress
                response_destination:MsgAddress custom_payload:(Maybe ^Cell)
                forward_ton_amount:(VarUInteger 16) forward_payload:(Either Cell ^Cell)
                = InternalMsgBody; 32 + 64 + 124 + 267 + 267 + 1 + 5  + 1
     */
+    var msg = createMessage({
+        bounce: false,
+        dest: jettonWallet,
+        value: FEE_JETTON_PAYOUT,
+        body: AskToTransfer {
+                queryId: 0,
+                jettonAmount: amount,
+                transferRecipient: dest,
+                sendExcessesTo: dest,
+                customPayload: null,
+                forwardTonAmount: 0,
+                forwardPayload: null
+            }
+    });
+
+    msg.send(SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE | SEND_MODE_IGNORE_ERRORS);
+    /*
     sendMessage(
         beginCell()
             .storeUint(NON_BOUNCEABLE, 6)
@@ -522,16 +587,26 @@ fun sendJettonsBack(dest: slice, amount: int, jettonWallet: slice) {
         .endCell(),
         SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE | SEND_MODE_IGNORE_ERRORS
     );
+    */
 }
 
 @inline_ref
-fun sendExcess(channel: Channel, dest: slice) {
+fun sendExcess(channel: Channel, dest: address) {
     var reserve: int = channel.paymentConfig.storageFee;
     if (channel.paymentConfig.currencyType == CURRENCY_TYPE_TON) {
         reserve += channel.balance.calcA() + channel.balance.calcB();
     }
     reserveToncoinsOnBalance(reserve, RESERVE_MODE_AT_MOST);
 
+   var msg = createMessage({
+      bounce: false, 
+      dest: dest,
+      value: 0,
+      body: (OP_EXCESSES as uint32, 0 as uint64)
+   });
+
+   msg.send(SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS);
+   /*
    sendMessage(
         beginCell()
             .storeUint(NON_BOUNCEABLE, 6)
@@ -543,10 +618,11 @@ fun sendExcess(channel: Channel, dest: slice) {
         .endCell(),
        SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS
     );
+    */
 }
 
 @inline_ref
-fun assignJettonWallet(channel: Channel, sender: slice, payload: slice) {
+fun assignJettonWallet(channel: Channel, sender: address, payload: slice) {
     /* TEP-89
       take_wallet_address#d1735400 query_id:uint64 wallet_address:MsgAddress
                                    owner_address:(Maybe ^MsgAddress)
@@ -554,8 +630,8 @@ fun assignJettonWallet(channel: Channel, sender: slice, payload: slice) {
     */
     payload.skipBits(64);
 
-    assert(addressIsNone(channel.paymentConfig.jettonWallet)) throw ERROR_JETTON_WALLET_ALREADY_INSTALLED;
-    assert(channel.paymentConfig.jettonRoot.bitsEqual(sender)) throw ERROR_NOT_AUTHORIZED;
+    assert(channel.paymentConfig.jettonWallet.isNone()) throw ERROR_JETTON_WALLET_ALREADY_INSTALLED;
+    assert(channel.paymentConfig.jettonRoot == sender) throw ERROR_NOT_AUTHORIZED;
 
     channel.paymentConfig.jettonWallet = payload.loadAddress();
     channel.paymentConfig.update();
@@ -597,12 +673,24 @@ fun Balance.calcB(self): int {
 }
 
 @inline_ref
-fun requestJettonWallet(channel: Channel) {
+fun requestJettonWallet(jettonRoot: address) {
     /* TEP-89
       provide_wallet_address#2c76b973 query_id:uint64 owner_address:MsgAddress
                                       include_address:Bool
                                       = InternalMsgBody;
     */
+    var request = createMessage({
+        bounce: false,
+        dest: jettonRoot,
+        value: FEE_JETTON_WALLET_PROVIDE,
+        body: ProvideWalletAddress {
+            queryId: 0,
+            ownerAddress: contract.getAddress(),
+            include_address: false
+        }
+    });
+    request.send(0);
+    /*
     sendMessage(beginCell()
         .storeUint(NON_BOUNCEABLE, 6)
         .storeSlice(channel.paymentConfig.jettonRoot)
@@ -613,6 +701,7 @@ fun requestJettonWallet(channel: Channel) {
         .storeSlice(contract.getAddress())
         .storeBool(false)
     .endCell(), 0);
+    */
     return;
 }
 
