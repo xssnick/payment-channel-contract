@@ -1,15 +1,15 @@
 import { Blockchain, BlockchainSnapshot, SandboxContract, SendMessageResult, TreasuryContract } from '@ton/sandbox';
-import { Address, beginCell, Cell, contractAddress, Dictionary, generateMerkleProof, Slice, toNano, Transaction } from '@ton/core';
+import { Address, beginCell, Cell, contractAddress, Dictionary, generateMerkleProof, SendMode, Slice, toNano, Transaction } from '@ton/core';
 import { Balance, BalanceCommit, balanceToCell, CloseState, mapState, PaymentChannel, PaymentChannelConfig, paymentChannelConfigToCell, SemiChannel, SemiChannelBody, signSemiChannel } from '../wrappers/PaymentChannel';
 import { JettonWallet } from '../wrappers/JettonWallet';
 import { JettonMinter } from '../wrappers/JettonMinter';
 import '@ton/test-utils';
 import { compile } from '@ton/blueprint';
 import { KeyPair, getSecureRandomBytes, keyPairFromSeed } from '@ton/crypto';
-import { CodeSegmentSlice, getRandomInt, loadCodeDictionary, signCell, testJettonNotification } from './utils';
+import { CodeSegmentSlice, getRandomInt, loadCodeDictionary, signCell, testJettonNotification, testJettonTransfer } from './utils';
 import { Errors, Op } from '../wrappers/Constants';
 import { Op as JettonOp } from '../wrappers/JettonConstants';
-import { getMsgPrices, computedGeneric } from './gasUtils';
+import { getMsgPrices, computedGeneric, computeMessageForwardFees } from './gasUtils';
 import { findTransaction, findTransactionRequired } from '@ton/test-utils';
 
 type ChannelData = Awaited<ReturnType<SandboxContract<PaymentChannel>['getChannelData']>>;
@@ -489,6 +489,68 @@ describe('PaymentChannel', () => {
         expect(await channelJetton.getJettonBalance()).toEqual(balanceBefore + depoAmount);
 
         expect(smc.balance).toEqual(tonChannelConfig.paymentConfig.storageFee);
+    });
+    it('should only accept top up from own jetton wallet', async () => {
+
+        let depoAmount = BigInt(getRandomInt(10, 100)) * toNano('0.01');
+        let msgValue   = BigInt(getRandomInt(5, 10)) * toNano('0.01');
+
+        const dataBefore = await tonChannel.getChannelData();
+
+        for (let testWallet of [walletA, walletB]) {
+            const isA = testWallet === walletA;
+            const notificationMessage = beginCell()
+             .storeUint(JettonOp.transfer_notification, 32)
+             .storeUint(0, 64)
+             .storeCoins(depoAmount)
+             .storeAddress(testWallet.address)
+             .storeBit(false)
+             .storeSlice(PaymentChannel.topUpMessage(isA).asSlice())
+            .endCell();
+
+            // Sending directly from wallet
+            const res = await testWallet.send({
+                to: tonChannel.address,
+                value: msgValue,
+                body: notificationMessage,
+                sendMode: SendMode.PAY_GAS_SEPARATELY | SendMode.IGNORE_ERRORS
+            });
+
+            const topUpTx = res.transactions[1];
+
+            const dataAfter = await tonChannel.getChannelData();
+
+            if(isA) {
+                expect(dataAfter.balance.depositA).toEqual(dataBefore.balance.depositA);
+                expect(dataAfter.balance.balanceA).toEqual(dataBefore.balance.balanceA);
+            } else {
+                expect(dataAfter.balance.depositB).toEqual(dataBefore.balance.depositB);
+                expect(dataAfter.balance.balanceB).toEqual(dataBefore.balance.balanceB);
+            }
+            expect(res.transactions).toHaveTransaction({
+                on: tonChannel.address,
+                from: testWallet.address,
+                op: JettonOp.transfer_notification,
+                value: msgValue,
+                outMessagesCount: 1
+            });
+
+            const fwdFees = computeMessageForwardFees(msgPrices, topUpTx.outMessages.get(0)!);
+
+            // Expect return attempt
+            expect(res.transactions).toHaveTransaction({
+                on: testWallet.address,
+                from: tonChannel.address,
+                op: JettonOp.transfer,
+                // Make sure it returns value in mode 64 and won't burn balance
+                value: msgValue - computedGeneric(topUpTx).gasFees - fwdFees.fees.total,
+                body: b => testJettonTransfer(b!, {
+                    to: testWallet.address,
+                    amount: depoAmount,
+                    forward_payload: null
+                })
+            });
+        }
     });
 
     it('should not be able to re-deploy', async () => {
