@@ -80,7 +80,9 @@ fun sendPayoutTon(sAddr: slice, amount: int, channelId: int, op: int, flags: int
 @inline
 fun sendPayoutEC(ecId: int, sAddr: slice, amount: int, channelId: int, op: int, flags: int) {
     var currenciesToSend: dict = createEmptyDict();
-    currenciesToSend.uDictSetBuilder(32, ecId, beginCell().storeVarUInt32(amount));
+    if(amount > 0) {
+        currenciesToSend.uDictSetBuilder(32, ecId, beginCell().storeVarUInt32(amount));
+    }
 
     sendMessage(
         beginCell()
