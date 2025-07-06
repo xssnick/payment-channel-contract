@@ -2,6 +2,7 @@ import "@stdlib/common.tolk"
 import "@stdlib/gas-payments"
 import "@stdlib/tvm-dicts"
 import "@stdlib/tvm-lowlevel"
+import "storage.tolk"
 import "types.tolk"
 import "errors.tolk"
 import "messages.tolk"
@@ -11,12 +12,15 @@ fun Channel.topUpBalance(mutate self, amount: int, msg: slice) {
     // we allow topup only when there is no disput
     assert(self.quarantine == null) throw ERROR_QUARANTINE_ALREADY_ACTIVE;
 
+    var balanceUnpacked = Balance.fromCell(self.balance);
+
     var isA: bool = msg.loadBool();
     if (isA) {
-        self.balance.depositA += amount;
+        balanceUnpacked.depositA += amount;
     } else {
-        self.balance.depositB += amount;
+        balanceUnpacked.depositB += amount;
     }
+    self.balance = balanceUnpacked.toCell();
 
     contract.setData(self.serialize());
 }
@@ -29,25 +33,31 @@ fun initChannel(channel: Channel, msg: slice) {
     assert(isSignatureValid(msg.hash(), signature, isA ? channel.keyA : channel.keyB)) throw ERROR_NOT_AUTHORIZED;
     msg.verifyMessageType(TAG_INIT_CHANNEL, channel.id);
 
+    var balanceUnpacked = Balance.fromCell(channel.balance);
+    var paymentConfigUnpacked = PaymentConfig.fromCell(channel.paymentConfig);
+
     // must be 0, we handle adjustments in topup and withdraw
-    assert((channel.balance.sentA | channel.balance.sentB | 
-            channel.balance.depositA | channel.balance.depositB |
-            channel.balance.withdrawA | channel.balance.withdrawB) == 0) throw ERROR_INCORRECT_INITIAL_BALANCE;
+    assert((balanceUnpacked.sentA | balanceUnpacked.sentB | 
+            balanceUnpacked.depositA | balanceUnpacked.depositB |
+            balanceUnpacked.withdrawA | balanceUnpacked.withdrawB) == 0) throw ERROR_INCORRECT_INITIAL_BALANCE;
 
     var storageMin: int = FEE_MIN_BALANCE;
-    if (channel.paymentConfig.currencyType == CURRENCY_TYPE_JETTON) {
-        // must keep fee for final withdrawal
-        storageMin += (FEE_JETTON_PAYOUT * 2) + FEE_JETTON_WALLET_PROVIDE;
-        if (channel.paymentConfig.jettonWallet.isNone()) {
-            // request our wallet address from jetton master
-            requestJettonWallet(channel.paymentConfig.jettonRoot);
+    if(paymentConfigUnpacked.customCurrency != null) {
+        if (paymentConfigUnpacked.customCurrency is Cell<PaymentConfigJetton>) {
+            // must keep fee for final withdrawal
+            var jettonConfig = PaymentConfigJetton.fromCell(paymentConfigUnpacked.customCurrency);
+            storageMin += (FEE_JETTON_PAYOUT * 2) + FEE_JETTON_WALLET_PROVIDE;
+            if (jettonConfig.jettonWallet.isNone()) {
+                // request our wallet address from jetton master
+                requestJettonWallet(jettonConfig.jettonRoot);
+            }
+        } else {
+            storageMin += FEE_EC_PAYOUT * 2;
         }
-    } else if (channel.paymentConfig.currencyType == CURRENCY_TYPE_EC) {
-        storageMin += FEE_EC_PAYOUT * 2;
     }
 
-    assert((channel.paymentConfig.storageFee > storageMin) &
-        (contract.getOriginalBalance() >= channel.paymentConfig.storageFee)) throw ERROR_NOT_ENOUGH_MONEY_FOR_INIT_STORAGE;
+    assert((paymentConfigUnpacked.storageFee > storageMin) &&
+        (contract.getOriginalBalance() >= paymentConfigUnpacked.storageFee)) throw ERROR_NOT_ENOUGH_MONEY_FOR_INIT_STORAGE;
 
     channel.inited = true;
     return contract.setData(channel.serialize());
@@ -56,31 +66,33 @@ fun initChannel(channel: Channel, msg: slice) {
 @inline_ref
 fun sendPayout(config: PaymentConfig, sAddr: address, amount: int, payload: builder, flags: int) {
 
-    var payout = match(config.currencyType) {
-        CURRENCY_TYPE_TON => PayoutResult {
-                    msg: createMessage({
-                            bounce: false,
-                            dest: sAddr,
-                            value: amount,
-                            body: UnsafeBodyNoRef{
-                                bodyForceNoRef: payload
-                            }
-                        }),
-                    fee: 0
-        },
-        CURRENCY_TYPE_JETTON => PayoutResult {
-                msg: createPayoutJetton(config.jettonWallet, sAddr, amount, payload, flags),
-                fee: FEE_JETTON_PAYOUT
-        },
-        CURRENCY_TYPE_EC => PayoutResult {
-                msg: createPayoutEC(config.ecId, sAddr, amount, payload, flags),
-                fee: FEE_EC_PAYOUT
-        },
-        else => throw(42)
+    var msg: OutMessage?;
+    var fee = 0;
+
+    match(config.customCurrency) {
+        null =>  {
+            msg = createMessage({
+                bounce: false,
+                dest: sAddr,
+                value: amount,
+                body: UnsafeBodyNoRef{
+                    bodyForceNoRef: payload
+                }
+            })
+        }
+        Cell<PaymentConfigJetton> => {
+                var jettonConfig = PaymentConfigJetton.fromCell(config.customCurrency);
+                msg = createPayoutJetton(jettonConfig.jettonWallet, sAddr, amount, payload, flags);
+                fee = FEE_JETTON_PAYOUT;
+        }
+        PaymentConfigExtra => {
+                msg = createPayoutEC(config.customCurrency.ecId, sAddr, amount, payload, flags);
+                fee = FEE_EC_PAYOUT;
+        }
     };
 
-    payout.msg.send(flags);
-    return payout.fee;
+    msg.send(flags);
+    return fee;
 }
 
 /*
@@ -180,14 +192,15 @@ fun createPayoutJetton(wallet: address, sAddr: address, amount: int, payload: bu
     */
 }
 
-fun Channel.closeChannel(mutate self) {
+fun Channel.closeChannel(mutate self, unpackedBalance: Balance) {
     var closeMsg = beginCell().storeAny(ChannelClosedNotification {
         channelId: self.id
     });
 
-    sendPayout(self.paymentConfig, self.paymentConfig.addressB, self.balance.calcB(), closeMsg, SEND_MODE_IGNORE_ERRORS);
+    var unpackedConfig  = PaymentConfig.fromCell(self.paymentConfig);
+    sendPayout(unpackedConfig, unpackedConfig.addressB, unpackedBalance.calcB(), closeMsg, SEND_MODE_IGNORE_ERRORS);
     // side A is considered to be deployer, so he will get rest contract's ton balance
-    sendPayout(self.paymentConfig, self.paymentConfig.addressA, self.balance.calcA(), closeMsg, SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS);
+    sendPayout(unpackedConfig, unpackedConfig.addressA, unpackedBalance.calcA(), closeMsg, SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS);
 
     // while self contract will be emptied it will survive for some time
     // by clearing storage we allow immediately reopen self with the same configs
@@ -199,7 +212,7 @@ fun Channel.closeChannel(mutate self) {
         withdrawB: 0,
         sentA: 0,
         sentB: 0,
-    };
+    }.toCell();
     self.quarantine = null;
 
     return contract.setData(self.serialize());
@@ -219,8 +232,10 @@ fun Channel.cooperativeClose(mutate self, msg: slice) {
     var newSentA: int = msg.loadCoins();
     var newSentB: int = msg.loadCoins();
 
-    self.balance.sentA = newSentA;
-    self.balance.sentB = newSentB;
+    var unpackedBalance = Balance.fromCell(self.balance);
+
+    unpackedBalance.sentA = newSentA;
+    unpackedBalance.sentB = newSentB;
 
     var newSeqnoA: int = msg.loadUint(64);
     var newSeqnoB: int = msg.loadUint(64);
@@ -230,7 +245,7 @@ fun Channel.cooperativeClose(mutate self, msg: slice) {
     self.commitedSeqnoA = newSeqnoA;
     self.commitedSeqnoB = newSeqnoB;
 
-    self.closeChannel();
+    self.closeChannel(unpackedBalance);
 }
 
 @inline_ref
@@ -247,8 +262,9 @@ fun Channel.cooperativeCommit(mutate self, msg: slice, msgValue: int) {
     var newSentA: int = msg.loadCoins();
     var newSentB: int = msg.loadCoins();
 
-    self.balance.sentA = newSentA;
-    self.balance.sentB = newSentB;
+    var unpackedBalance = Balance.fromCell(self.balance);
+    unpackedBalance.sentA = newSentA;
+    unpackedBalance.sentB = newSentB;
 
     var newSeqnoA: int = msg.loadUint(64);
     var newSeqnoB: int = msg.loadUint(64);
@@ -270,29 +286,43 @@ fun Channel.cooperativeCommit(mutate self, msg: slice, msgValue: int) {
     var withdrawB: int = msg.loadCoins();
 
 
-    var withdrawAmount = withdrawB - self.balance.withdrawB;
+    var withdrawAmount = withdrawB - unpackedBalance.withdrawB;
     assert(withdrawAmount >= 0) throw ERROR_WITHDRAW_REGRESS;
+    var withdrawMade = false;
+    var unpackedPaymentConfig: PaymentConfig? = null;
+
     if (withdrawAmount > 0) {
-        self.balance.withdrawB = withdrawB;
+        unpackedPaymentConfig = PaymentConfig.fromCell(self.paymentConfig);
+        unpackedBalance.withdrawB = withdrawB;
         var withdrawMsg = beginCell().storeAny(WithdrawNotification {
             channelId: self.id
         });
-        msgValue -= sendPayout(self.paymentConfig, self.paymentConfig.addressB, withdrawAmount, withdrawMsg, 0);
+        msgValue -= sendPayout(unpackedPaymentConfig, unpackedPaymentConfig.addressB, withdrawAmount, withdrawMsg, 0);
+        withdrawMade = true;
     }
 
-    withdrawAmount = withdrawA - self.balance.withdrawA;
+    withdrawAmount = withdrawA - unpackedBalance.withdrawA;
     assert(withdrawAmount >= 0) throw ERROR_WITHDRAW_REGRESS;
     if (withdrawAmount > 0) {
-        self.balance.withdrawA = withdrawA;
+        unpackedBalance.withdrawA = withdrawA;
         var withdrawMsg = beginCell().storeAny(WithdrawNotification {
             channelId: self.id
         });
+        if(unpackedPaymentConfig == null) {
+            unpackedPaymentConfig = PaymentConfig.fromCell(self.paymentConfig);
+        }
 
-        msgValue -= sendPayout(self.paymentConfig,self.paymentConfig.addressA, withdrawAmount, withdrawMsg, 0);
+        msgValue -= sendPayout(unpackedPaymentConfig,unpackedPaymentConfig.addressA, withdrawAmount, withdrawMsg, 0);
+
+        withdrawMade = true;
     }
 
     assert(msgValue >= 0) throw ERROR_AMOUNT_NOT_COVERS_FEE;
-    assert(self.balance.calcA() >= 0 && self.balance.calcB() >= 0) throw ERROR_NOT_ENOUGH_BALANCE;
+    assert(unpackedBalance.calcA() >= 0 && unpackedBalance.calcB() >= 0) throw ERROR_NOT_ENOUGH_BALANCE;
+
+    if(withdrawMade) {
+        self.balance = unpackedBalance.toCell();
+    }
 
     contract.setData(self.serialize());
 }
@@ -340,8 +370,9 @@ fun challengeQuarantinedState(channel: Channel, msg: slice) {
     verifyStates(channel.commitedSeqnoA, channel.commitedSeqnoB, a, b);
 
     var qua = Quarantine.parse(channel.quarantine);
+    var closure = ClosureConfig.fromCell(channel.closureConfig);
 
-    assert(qua.startedAt + channel.closureConfig.quarantineDuration > blockchain.now()) throw ERROR_TOO_LATE_FOR_QUARANTINE_CHALLENGE;
+    assert(qua.startedAt + closure.quarantineDuration > blockchain.now()) throw ERROR_TOO_LATE_FOR_QUARANTINE_CHALLENGE;
     assert(!qua.challenged) throw ERROR_QUARANTINEE_ALREADY_CHALLENGED;
 
     // misbehvaior is when party which committed outdated state
@@ -359,9 +390,9 @@ fun challengeQuarantinedState(channel: Channel, msg: slice) {
 
     if (misbehaviorDetected) {
         if (qua.committedbyA) {
-            qua.stateA.sent += channel.closureConfig.fine;
+            qua.stateA.sent += closure.fine;
         } else {
-            qua.stateB.sent += channel.closureConfig.fine;
+            qua.stateB.sent += closure.fine;
         }
     }
 
@@ -386,10 +417,11 @@ fun settleConditionals(channel: Channel, msg: slice) {
     var conditionalsProof: cell = msg.loadRef();
 
     var qua = Quarantine.parse(channel.quarantine);
+    var closure = ClosureConfig.fromCell(channel.closureConfig);
 
-    var quarantineeFinished: int = qua.startedAt + channel.closureConfig.quarantineDuration;
+    var quarantineeFinished: int = qua.startedAt + closure.quarantineDuration;
     assert(quarantineeFinished < blockchain.now()) throw ERROR_QUARANTINE_NOT_FINISHED;
-    assert(quarantineeFinished + channel.closureConfig.closeDuration > blockchain.now()) throw ERROR_TOO_LATE_TO_SETTLE_CONDITIONALS;
+    assert(quarantineeFinished + closure.closeDuration > blockchain.now()) throw ERROR_TOO_LATE_TO_SETTLE_CONDITIONALS;
 
     var targetState = fromA ? qua.stateB : qua.stateA;
 
@@ -432,27 +464,30 @@ fun Channel.finishUncooperativeClose(mutate self) {
     assert(self.quarantine != null) throw ERROR_NO_QUARANTINED_STATE;
 
     var qua = Quarantine.parse(self.quarantine);
+    var closure = ClosureConfig.fromCell(self.closureConfig);
 
     assert(qua.startedAt +
-        self.closureConfig.quarantineDuration +
-        self.closureConfig.closeDuration < blockchain.now()) throw ERROR_TOO_EARLY_TO_CLOSE;
+        closure.quarantineDuration +
+        closure.closeDuration < blockchain.now()) throw ERROR_TOO_EARLY_TO_CLOSE;
 
-    self.balance.sentB = qua.stateB.sent;
-    self.balance.sentA = qua.stateA.sent;
+    var unpackedBalance = Balance.fromCell(self.balance);
 
-    var balanceB = self.balance.calcB();
-    var balanceA = self.balance.calcA();
+    unpackedBalance.sentB = qua.stateB.sent;
+    unpackedBalance.sentA = qua.stateA.sent;
+
+    var balanceB = unpackedBalance.calcB();
+    var balanceA = unpackedBalance.calcA();
 
     if (balanceB < 0) {
-        self.balance.sentA -= balanceB;
+        unpackedBalance.sentA -= balanceB;
     }
     if (balanceA < 0) {
-        self.balance.sentB -= balanceA;
+        unpackedBalance.sentB -= balanceA;
     }
 
     self.commitedSeqnoA = qua.stateA.seqno + 1;
     self.commitedSeqnoB = qua.stateB.seqno + 1;
-    self.closeChannel();
+    self.closeChannel(unpackedBalance);
 }
 
 fun onInternalMessage(_: int, amount: int, inMsgFull: cell, inMsg: slice) {
@@ -470,11 +505,12 @@ fun onInternalMessage(_: int, amount: int, inMsgFull: cell, inMsg: slice) {
     // thus no responses and query_ids
     var op: int = inMsg.loadUint(32);
     if (op == OP_TOP_UP_BALANCE) {
-        if (channel.paymentConfig.currencyType == CURRENCY_TYPE_EC) {
+        var unpackedPaymentConfig = PaymentConfig.fromCell(channel.paymentConfig);
+        if (unpackedPaymentConfig.customCurrency is PaymentConfigExtra) {
             assert(amount >= FEE_EC_ACCEPT) throw ERROR_AMOUNT_NOT_COVERS_FEE;
 
             var ec: dict = cs.loadDict();
-            var (v: slice?, ok: bool) = ec.uDictDeleteAndGet(32, channel.paymentConfig.ecId);
+            var (v: slice?, ok: bool) = ec.uDictDeleteAndGet(32, unpackedPaymentConfig.customCurrency.ecId);
             // If dictionary contains more than one EC - reject
             assert(ok && ec == null) throw ERROR_INVALID_EC_ID;
 
@@ -521,7 +557,9 @@ fun acceptJettons(channel: Channel, sender: address, tonAmount: int, payload: sl
                                      sender:MsgAddress forward_payload:(Either Cell ^Cell)
                                      = InternalMsgBody;
     */
-    assert(channel.paymentConfig.currencyType == CURRENCY_TYPE_JETTON) throw ERROR_INVALID_CURRENCY_TYPE;
+    var jettonCell = PaymentConfig.fromCell(channel.paymentConfig).customCurrency;
+    assert(jettonCell is Cell<PaymentConfigJetton>) throw ERROR_INVALID_CURRENCY_TYPE;
+    var jettonConfig = PaymentConfigJetton.fromCell(jettonCell);
 
     payload.skipBits(64);
     var jettonAmount: int = payload.loadCoins();
@@ -530,7 +568,7 @@ fun acceptJettons(channel: Channel, sender: address, tonAmount: int, payload: sl
     var eitherForwardPayload: bool = payload.loadBool();
     var forwardPayload: slice = eitherForwardPayload ? payload.loadRef().beginParse() : payload;
 
-    if ((tonAmount < FEE_JETTON_ACCEPT) | (!channel.paymentConfig.jettonWallet.bitsEqual(sender))) {
+    if ((tonAmount < FEE_JETTON_ACCEPT) || (jettonConfig.jettonWallet != sender)) {
         return sendJettonsBack(jettonSender, jettonAmount, sender);
     }
 
@@ -596,9 +634,12 @@ fun sendJettonsBack(dest: address, amount: int, jettonWallet: address) {
 
 @inline_ref
 fun sendExcess(channel: Channel, dest: address) {
-    var reserve: int = channel.paymentConfig.storageFee;
-    if (channel.paymentConfig.currencyType == CURRENCY_TYPE_TON) {
-        reserve += channel.balance.calcA() + channel.balance.calcB();
+    var paymentConfig = PaymentConfig.fromCell(channel.paymentConfig);
+    var reserve: int = paymentConfig.storageFee;
+
+    if (paymentConfig.customCurrency == null) {
+        var channelBalance = Balance.fromCell(channel.balance);
+        reserve += channelBalance.calcA() + channelBalance.calcB();
     }
     reserveToncoinsOnBalance(reserve, RESERVE_MODE_AT_MOST);
 
@@ -634,11 +675,18 @@ fun assignJettonWallet(channel: Channel, sender: address, payload: slice) {
     */
     payload.skipBits(64);
 
-    assert(channel.paymentConfig.jettonWallet.isNone()) throw ERROR_JETTON_WALLET_ALREADY_INSTALLED;
-    assert(channel.paymentConfig.jettonRoot == sender) throw ERROR_NOT_AUTHORIZED;
+    var paymentConfig = PaymentConfig.fromCell(channel.paymentConfig);
+    var jettonConfig  = match(paymentConfig.customCurrency) {
+        null => throw(42),
+        PaymentConfigExtra => throw(42),
+        Cell<PaymentConfigJetton> => PaymentConfigJetton.fromCell(paymentConfig.customCurrency),
+    };
+    assert(jettonConfig.jettonWallet.isNone()) throw ERROR_JETTON_WALLET_ALREADY_INSTALLED;
+    assert(jettonConfig.jettonRoot == sender) throw ERROR_NOT_AUTHORIZED;
 
-    channel.paymentConfig.jettonWallet = payload.loadAddress();
-    channel.paymentConfig.update();
+    jettonConfig.jettonWallet = payload.loadAddress();
+    paymentConfig.customCurrency = jettonConfig.toCell();
+    channel.paymentConfig = paymentConfig.toCell();
 
     return contract.setData(channel.serialize());
 }
@@ -720,14 +768,15 @@ get getChannelState(): int {
     }
 
     var qua = Quarantine.parse(channel.quarantine);
+    var closure = ClosureConfig.fromCell(channel.closureConfig);
 
-    if (qua.startedAt + channel.closureConfig.quarantineDuration > blockchain.now()) {
+    if (qua.startedAt + closure.quarantineDuration > blockchain.now()) {
         return STATE_CLOSURE_STARTED;
     }
 
     if (qua.startedAt +
-        channel.closureConfig.quarantineDuration +
-        channel.closureConfig.closeDuration > blockchain.now()) {
+        closure.quarantineDuration +
+        closure.closeDuration > blockchain.now()) {
         return STATE_SETTLING_CONDITIONALS;
     }
     
@@ -737,12 +786,15 @@ get getChannelState(): int {
 get getChannelData() {
     var channel = Channel.parse(contract.getData());
 
+    var channelBalance = Balance.fromCell(channel.balance);
+    var paymentConfig  = PaymentConfig.fromCell(channel.paymentConfig);
+
     return (getChannelState(),
-        [channel.balance.calcA(), channel.balance.calcB(), channel.balance.depositA, channel.balance.depositB, channel.balance.withdrawA, channel.balance.withdrawB],
+        [channelBalance.calcA(), channelBalance.calcB(), channelBalance.depositA, channelBalance.depositB, channelBalance.withdrawA, channelBalance.withdrawB],
         [channel.keyA, channel.keyB],
         channel.id,
-        channel.closureConfig.ref,
+        channel.closureConfig,
         [channel.commitedSeqnoA, channel.commitedSeqnoB],
         channel.quarantine,
-        [channel.paymentConfig.storageFee, channel.paymentConfig.addressA, channel.paymentConfig.addressB]);
+        [paymentConfig.storageFee, paymentConfig.addressA, paymentConfig.addressB]);
 }
