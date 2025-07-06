@@ -43,7 +43,7 @@ struct (0x0f8a7ea5) AskToTransfer {
     sendExcessesTo: address,
     customPayload: cell?,
     forwardTonAmount: coins,
-    forwardPayload: builder | cell?
+    forwardPayload: builder | cell
 }
 
 struct (0x7362d09c) TransferNotificationForRecipient {

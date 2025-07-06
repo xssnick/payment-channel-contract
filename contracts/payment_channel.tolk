@@ -62,7 +62,9 @@ fun sendPayout(config: PaymentConfig, sAddr: address, amount: int, payload: buil
                             bounce: false,
                             dest: sAddr,
                             value: amount,
-                            body: payload
+                            body: UnsafeBodyNoRef{
+                                bodyForceNoRef: payload
+                            }
                         }),
                     fee: 0
         },
@@ -108,7 +110,9 @@ fun createPayoutEC(ecId: int, sAddr: address, amount: int, payoutBody: builder, 
         bounce: false,
         dest: sAddr,
         value: (FEE_EC_PAYOUT, currenciesToSend),
-        body: payoutBody
+        body: UnsafeBodyNoRef {
+            bodyForceNoRef: payoutBody
+        }
     });
 
     /*
@@ -553,15 +557,15 @@ fun sendJettonsBack(dest: address, amount: int, jettonWallet: address) {
     var msg = createMessage({
         bounce: false,
         dest: jettonWallet,
-        value: FEE_JETTON_PAYOUT,
+        value: 0,
         body: AskToTransfer {
                 queryId: 0,
                 jettonAmount: amount,
                 transferRecipient: dest,
                 sendExcessesTo: dest,
                 customPayload: null,
-                forwardTonAmount: 0,
-                forwardPayload: null
+                forwardTonAmount: 1,
+                forwardPayload: beginCell()
             }
     });
 
