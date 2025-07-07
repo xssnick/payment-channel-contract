@@ -1,91 +1,91 @@
 import "errors"
 
-const TAG_STATE = 0x43685374;
+const TAG_STATE = 0x43685374
 
 struct SemichannelInternal {
-    data: SemichannelBody;
-    counterpartyData: Cell<SemichannelBody>?;
+    data: SemichannelBody
+    counterpartyData: Cell<SemichannelBody>?
 }
 struct Semichannel {
-    data: SemichannelBody;
-    counterpartyData: SemichannelBody;
+    data: SemichannelBody
+    counterpartyData: SemichannelBody
 }
 struct SemichannelPacked {
-    tag: uint32;
-    id: uint128;
-    state: SemichannelInternal;
+    tag: uint32
+    id: uint128
+    state: SemichannelInternal
 }
 
 struct SemichannelSigned {
-    signature: bits512;
-    channel: Cell<SemichannelPacked>;
+    signature: bits512
+    channel: Cell<SemichannelPacked>
 }
 
 struct SemichannelBody {
-    seqno: uint64;
-    sent: coins;
-    conditionalsHash: uint256;
+    seqno: uint64
+    sent: coins
+    conditionalsHash: uint256
 }
 
 struct Quarantine {
-    stateA: SemichannelBody;
-    stateB: SemichannelBody;
-    startedAt: uint32;
-    committedbyA: bool;
-    challenged: bool;
+    stateA: SemichannelBody
+    stateB: SemichannelBody
+    startedAt: uint32
+    committedbyA: bool
+    challenged: bool
 }
 
 struct ClosureConfig {
-    quarantineDuration: uint32;
-    fine: coins;
-    closeDuration: uint32;
+    quarantineDuration: uint32
+    fine: coins
+    closeDuration: uint32
 }
 
 struct PaymentConfigJetton {
-    jettonRoot: address;
-    jettonWallet: address;
+    jettonRoot: address
+    jettonWallet: address
 }
 // Tags for Maybe(Either) workaround
 struct (0b10)PaymentConfigExtra {
-    ecId: uint32;
+    ecId: uint32
 }
 struct (0b0)PaymentConfigTon {}
 struct(0b11) PaymentConfigJettonStorage {
-    jettonCell: Cell<PaymentConfigJetton>;
+    jettonCell: Cell<PaymentConfigJetton>
 }
 type CustomCurrency =
     | PaymentConfigTon
     | PaymentConfigExtra
-    | PaymentConfigJettonStorage;
+    | PaymentConfigJettonStorage
 
 struct PaymentConfig {
-    storageFee: coins;
-    addressA: address;
-    addressB: address;
+    storageFee: coins
+    addressA: address
+    addressB: address
     customCurrency: CustomCurrency
 }
 
 struct Balance {
-    depositA: coins;
-    depositB: coins;
-    withdrawA: coins;
-    withdrawB: coins;
-    sentA: coins;
-    sentB: coins;
+    depositA: coins
+    depositB: coins
+    withdrawA: coins
+    withdrawB: coins
+    sentA: coins
+    sentB: coins
 }
 
 struct Channel {
-    inited: bool;
-    balance: Cell<Balance>;
-    keyA: uint256;
-    keyB: uint256;
-    id: uint128;
-    closureConfig: Cell<ClosureConfig>;
-    commitedSeqnoA: uint64;
-    commitedSeqnoB: uint64;
+    inited: bool
+    balance: Cell<Balance>
+    keyA: uint256
+    keyB: uint256
+    id: uint128
+    closureConfig: Cell<ClosureConfig>
+    commitedSeqnoA: uint64
+    commitedSeqnoB: uint64
 
-    quarantine: Cell<Quarantine>?;
-    paymentConfig: Cell<PaymentConfig>;
+    quarantine: Cell<Quarantine>?
+    paymentConfig: Cell<PaymentConfig>
 }
 
 @inline
