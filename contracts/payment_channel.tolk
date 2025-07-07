@@ -224,18 +224,15 @@ fun Channel.cooperativeClose(mutate self, msg: CooperativeCloseMessage) {
     assert(isSignatureValid(hash, msg.signatureA.beginParse(), self.keyA) &
         isSignatureValid(hash, msg.signatureB.beginParse(), self.keyB)) throw ERROR_NOT_AUTHORIZED;
 
-    var ds = msg.signedBody;
-
-    var newSentA: int = ds.loadCoins();
-    var newSentB: int = ds.loadCoins();
+    var closeBody = msg.signedBody.loadAny<CooperativeCloseBody>();
 
     var unpackedBalance = Balance.parse(self.balance);
 
-    unpackedBalance.sentA = newSentA;
-    unpackedBalance.sentB = newSentB;
+    unpackedBalance.sentA = closeBody.sentA;
+    unpackedBalance.sentB = closeBody.sentB;
 
-    var newSeqnoA: int = ds.loadUint(64);
-    var newSeqnoB: int = ds.loadUint(64);
+    var newSeqnoA: int = closeBody.seqnoA;
+    var newSeqnoB: int = closeBody.seqnoB;
     assert((self.commitedSeqnoA < newSeqnoA) &
         (self.commitedSeqnoB < newSeqnoB)) throw ERROR_SEQNO_REGRESS;
 
@@ -254,59 +251,53 @@ fun Channel.cooperativeCommit(mutate self, msg: CooperativeCommitMessage, msgVal
     assert(isSignatureValid(hash, msg.signatureA.beginParse(), self.keyA) &&
         isSignatureValid(hash, msg.signatureB.beginParse(), self.keyB)) throw ERROR_NOT_AUTHORIZED;
 
-    var ds = msg.signedBody;
-    var newSentA: int = ds.loadCoins();
-    var newSentB: int = ds.loadCoins();
+    var commitBody = msg.signedBody.loadAny<CooperativeCommitBody>();
 
     var unpackedBalance = Balance.parse(self.balance);
-    unpackedBalance.sentA = newSentA;
-    unpackedBalance.sentB = newSentB;
+    unpackedBalance.sentA = commitBody.sentA;
+    unpackedBalance.sentB = commitBody.sentB;
 
-    var newSeqnoA: int = ds.loadUint(64);
-    var newSeqnoB: int = ds.loadUint(64);
-    assert((self.commitedSeqnoA < newSeqnoA) &
-        (self.commitedSeqnoB < newSeqnoB)) throw ERROR_SEQNO_REGRESS;
+    assert((self.commitedSeqnoA < commitBody.seqnoA) &
+        (self.commitedSeqnoB < commitBody.seqnoB)) throw ERROR_SEQNO_REGRESS;
 
-    self.commitedSeqnoA = newSeqnoA;
-    self.commitedSeqnoB = newSeqnoB;
+    self.commitedSeqnoA = commitBody.seqnoA;
+    self.commitedSeqnoB = commitBody.seqnoB;
 
     if (self.quarantine != null) {
         var qua = Quarantine.parse(self.quarantine);
-        if ((newSeqnoA > qua.stateA.seqno) | (newSeqnoB > qua.stateB.seqno)) {
+        if ((commitBody.seqnoA > qua.stateA.seqno) | (commitBody.seqnoB > qua.stateB.seqno)) {
             // quarantinened state is older than newly commited one, drop it
             self.quarantine = null;
         }
     }
 
-    var withdrawA: int = ds.loadCoins();
-    var withdrawB: int = ds.loadCoins();
-
-
-    var withdrawAmount = withdrawB - unpackedBalance.withdrawB;
+    var withdrawAmount = commitBody.withdrawB - unpackedBalance.withdrawB;
     assert(withdrawAmount >= 0) throw ERROR_WITHDRAW_REGRESS;
     var unpackedPaymentConfig: PaymentConfig? = null;
 
+    var withdrawBody: builder? = null;
     if (withdrawAmount > 0) {
         unpackedPaymentConfig = PaymentConfig.parse(self.paymentConfig);
-        unpackedBalance.withdrawB = withdrawB;
-        var withdrawMsg = beginCell().storeAny(WithdrawNotification {
+        unpackedBalance.withdrawB = commitBody.withdrawB;
+        withdrawBody = beginCell().storeAny(WithdrawNotification {
             channelId: self.id
         });
-        msgValue -= sendPayout(unpackedPaymentConfig, unpackedPaymentConfig.addressB, withdrawAmount, withdrawMsg, 0);
+        msgValue -= sendPayout(unpackedPaymentConfig, unpackedPaymentConfig.addressB, withdrawAmount, withdrawBody, 0);
     }
 
-    withdrawAmount = withdrawA - unpackedBalance.withdrawA;
+    withdrawAmount = commitBody.withdrawA - unpackedBalance.withdrawA;
     assert(withdrawAmount >= 0) throw ERROR_WITHDRAW_REGRESS;
     if (withdrawAmount > 0) {
-        unpackedBalance.withdrawA = withdrawA;
+        unpackedBalance.withdrawA = commitBody.withdrawA;
         if(unpackedPaymentConfig == null) {
             unpackedPaymentConfig = PaymentConfig.parse(self.paymentConfig);
         }
-
-        var withdrawMsg = beginCell().storeAny(WithdrawNotification {
-            channelId: self.id
-        });
-        msgValue -= sendPayout(unpackedPaymentConfig,unpackedPaymentConfig.addressA, withdrawAmount, withdrawMsg, 0);
+        if(withdrawBody == null) {
+            withdrawBody = beginCell().storeAny(WithdrawNotification {
+                channelId: self.id
+            });
+        }
+        msgValue -= sendPayout(unpackedPaymentConfig,unpackedPaymentConfig.addressA, withdrawAmount, withdrawBody, 0);
     }
 
     assert(msgValue >= 0) throw ERROR_AMOUNT_NOT_COVERS_FEE;
@@ -323,10 +314,10 @@ fun startUncooperativeClose(channel: Channel, msg: StartUncooperativeCloseMessag
     assert(isSignatureValid(msg.signedBody.hash(), msg.signature as slice, msg.signedByA ? channel.keyA : channel.keyB)) throw ERROR_NOT_AUTHORIZED;
 
     msg.signedBody.verifyMessageType(TAG_START_UNCOOPERATIVE_CLOSE, channel.id);
-    var ds = msg.signedBody;
+    var commitBody = msg.signedBody.loadAny<StartUncooperativeCloseBody>();
 
-    var a = Semichannel.parse(ds.loadRef(), channel.id, channel.keyA);
-    var b = Semichannel.parse(ds.loadRef(), channel.id, channel.keyB);
+    var a = Semichannel.parse(commitBody.channelA, channel.id, channel.keyA);
+    var b = Semichannel.parse(commitBody.channelB, channel.id, channel.keyB);
 
     verifyStates(channel.commitedSeqnoA, channel.commitedSeqnoB,a, b);
 
@@ -351,9 +342,9 @@ fun challengeQuarantinedState(channel: Channel, msg: ChallengeQuarantineMessage)
 
     msg.signedBody.verifyMessageType(TAG_CHALLENGE_QUARANTINEED_STATE, channel.id);
 
-    var ds = msg.signedBody;
-    var a = Semichannel.parse(ds.loadRef(), channel.id, channel.keyA);
-    var b = Semichannel.parse(ds.loadRef(), channel.id, channel.keyB);
+    var challengeBody = msg.signedBody.loadAny<ChallengeQuarantineBody>();
+    var a = Semichannel.parse(challengeBody.stateA, channel.id, channel.keyA);
+    var b = Semichannel.parse(challengeBody.stateB, channel.id, channel.keyB);
 
     verifyStates(channel.commitedSeqnoA, channel.commitedSeqnoB, a, b);
 
@@ -399,9 +390,7 @@ fun settleConditionals(channel: Channel, msg: SettleConditionalsMessage) {
 
     msg.signedBody.verifyMessageType(TAG_SETTLE_CONDITIONALS, channel.id);
 
-    var ds = msg.signedBody;
-    var conditionalsToSettle: dict = ds.loadDict();
-    var conditionalsProof: cell = ds.loadRef();
+    var conditionals = msg.signedBody.loadAny<SettleConditionalsBody>();
 
     var qua = Quarantine.parse(channel.quarantine);
     var closure = ClosureConfig.parse(channel.closureConfig);
@@ -412,7 +401,7 @@ fun settleConditionals(channel: Channel, msg: SettleConditionalsMessage) {
 
     var targetState = msg.fromA ? qua.stateB : qua.stateA;
 
-    var (csProof: slice, special: int) = conditionalsProof.beginParseSpecial();
+    var (csProof: slice, special: int) = conditionals.proof.beginParseSpecial();
     assert(special) throw ERROR_INCORRECT_CONDITIONALS_PROOF;
     assert(csProof.loadUint(8) == 3) throw ERROR_INCORRECT_CONDITIONALS_PROOF;
     assert(csProof.preloadUint(256) == targetState.conditionalsHash) throw ERROR_INCORRECT_CONDITIONALS_PROOF;
@@ -420,7 +409,7 @@ fun settleConditionals(channel: Channel, msg: SettleConditionalsMessage) {
     var target: cell = csProof.preloadRef();
     var more: bool = true;
     do {
-        var (cid: int?, input: slice?, more redef) = conditionalsToSettle.uDictDeleteFirstAndGet(32);
+        var (cid: int?, input: slice?, more redef) = conditionals.toSettle.uDictDeleteFirstAndGet(32);
         if (more) {
             var empty: slice = emptySlice();
             var (target redef, condition: slice, ok: int) = target.isUdictReplaceGet(32, cid!, empty);

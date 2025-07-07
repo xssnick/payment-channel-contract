@@ -90,6 +90,14 @@ struct (0x076bfdf1) CooperativeCommitMessage {
     signatureB: cell;
     signedBody: RemainingBitsAndRefs;
 }
+struct CooperativeCommitBody {
+    sentA: coins;
+    sentB: coins;
+    seqnoA: uint64;
+    seqnoB: uint64;
+    withdrawA: coins;
+    withdrawB: coins;
+}
 
 struct (0xd2b1eeeb) CooperativeCloseMessage {
     signatureA: cell;
@@ -97,11 +105,23 @@ struct (0xd2b1eeeb) CooperativeCloseMessage {
     signedBody: RemainingBitsAndRefs;
 }
 
+struct CooperativeCloseBody {
+    sentA: coins;
+    sentB: coins;
+    seqnoA: uint64;
+    seqnoB: uint64;
+}
+
 struct (0x8175e15d) StartUncooperativeCloseMessage {
     signedByA: bool;
     signature: bits512;
     signedBody: RemainingBitsAndRefs;
 }
+struct StartUncooperativeCloseBody {
+    channelA: Cell<SemichannelSigned>;
+    channelB: Cell<SemichannelSigned>;
+}
+
 struct (0x25432a91) FinishUncooperativeCloseMessage {
     // Only OP tag
 }
@@ -111,9 +131,17 @@ struct (0x9a77c0db) ChallengeQuarantineMessage {
     signature: bits512;
     signedBody: RemainingBitsAndRefs;
 }
+struct ChallengeQuarantineBody {
+    stateA: Cell<SemichannelSigned>;
+    stateB: Cell<SemichannelSigned>;
+}
 
 struct (0x56c39b4c) SettleConditionalsMessage {
     fromA: bool;
     signature: bits512;
     signedBody: RemainingBitsAndRefs;
+}
+struct SettleConditionalsBody {
+    toSettle: dict;
+    proof: cell;
 }

@@ -104,6 +104,10 @@ fun PaymentConfig.parse(c: cell): PaymentConfig {
 fun PaymentConfig.serialize(self): cell {
     return self.toCell();
 }
+@inline
+fun PaymentConfigJetton.parse(c: cell): PaymentConfigJetton {
+    return PaymentConfigJetton.fromCell(c);
+}
 
 /*
 @inline
