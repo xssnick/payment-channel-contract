@@ -453,34 +453,34 @@ fun onInternalMessage(in: InMessage) {
                 assert(in.valueCoins >= FEE_TON_ACCEPT) throw ERROR_AMOUNT_NOT_COVERS_FEE;
                 channel.topUpBalance(in.valueCoins - FEE_TON_ACCEPT, msg.isA);
             }
-        },
+        }
         JettonTransferNotification => {
             // return because custom excess handled inside
             return acceptJettons(channel, in.senderAddress, in.valueCoins, msg);
-        },
+        }
         TakeWalletAddressMessage =>  {
             // no excess
             return assignJettonWallet(channel, in.senderAddress, msg.wallet_address);
-        },
+        }
         CooperativeCommitMessage => {
             channel.cooperativeCommit(msg, in.valueCoins - FEE_COMMIT);
-        },
+        }
         InitChannelMessage => {
             initChannel(channel, msg);
-        },
+        }
         CooperativeCloseMessage => {
             // excess hadled in channelClose()
             return channel.cooperativeClose(msg);
-        },
+        }
         StartUncooperativeCloseMessage => {
             startUncooperativeClose(channel, msg);
-        },
+        }
         ChallengeQuarantineMessage => {
             challengeQuarantinedState(channel, msg);
-        },
+        }
         SettleConditionalsMessage => {
             settleConditionals(channel, msg);
-        },
+        }
         FinishUncooperativeCloseMessage => {
             // excess hadled in channelClose()
             return channel.finishUncooperativeClose();
