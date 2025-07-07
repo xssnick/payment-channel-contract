@@ -1,4 +1,4 @@
-import { Blockchain, BlockchainSnapshot, SandboxContract, SendMessageResult, TreasuryContract } from '@ton/sandbox';
+import { Blockchain, BlockchainSnapshot, SandboxContract, SendMessageResult, setGlobalVersion, TreasuryContract } from '@ton/sandbox';
 import { Address, beginCell, Cell, contractAddress, Dictionary, generateMerkleProof, SendMode, Slice, toNano, Transaction } from '@ton/core';
 import { Balance, BalanceCommit, balanceToCell, CloseState, mapState, PaymentChannel, PaymentChannelConfig, paymentChannelConfigToCell, SemiChannel, SemiChannelBody, signSemiChannel } from '../wrappers/PaymentChannel';
 import { JettonWallet } from '../wrappers/JettonWallet';
@@ -86,6 +86,10 @@ describe('PaymentChannel', () => {
 
     beforeAll(async () => {
         blockchain = await Blockchain.create();
+
+        blockchain.setConfig(
+            setGlobalVersion(blockchain.config, 11)
+        );
 
         blockchain.now = 1000;
 

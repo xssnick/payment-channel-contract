@@ -250,8 +250,8 @@ export function paymentChannelConfigToCell(config: PaymentChannelConfig): Cell {
             .storeBuffer(config.keyB, 32)
             .storeUint(config.id, 128)
             .storeRef(closureConfigToCell(config.closureConfig))
-            .storeUint(0, 32) // commitedSeqNoA
-            .storeUint(0, 32) // commitedSeqNoB
+            .storeUint(0, 64) // commitedSeqNoA
+            .storeUint(0, 64) // commitedSeqNoB
             .storeMaybeRef(null) // No quarantine
             .storeRef(paymentConfigToCell(config.paymentConfig))
         .endCell();

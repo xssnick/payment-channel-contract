@@ -1,4 +1,4 @@
-import { Blockchain, BlockchainSnapshot, internal, SandboxContract, TreasuryContract } from '@ton/sandbox';
+import { Blockchain, BlockchainSnapshot, internal, SandboxContract, setGlobalVersion, TreasuryContract } from '@ton/sandbox';
 import { Address, beginCell, Cell, contractAddress, Dictionary, ExtraCurrency, generateMerkleProof, Slice, toNano } from '@ton/core';
 import { Balance, BalanceCommit, balanceToCell, CloseState, mapState, PaymentChannel, PaymentChannelConfig, paymentChannelConfigToCell, SemiChannel, SemiChannelBody, signSemiChannel } from '../wrappers/PaymentChannel';
 import '@ton/test-utils';
@@ -76,6 +76,10 @@ describe('PaymentChannel Extra', () => {
 
     beforeAll(async () => {
         blockchain = await Blockchain.create();
+
+        blockchain.setConfig(
+            setGlobalVersion(blockchain.config, 11)
+        );
 
         blockchain.now = 1000;
 
