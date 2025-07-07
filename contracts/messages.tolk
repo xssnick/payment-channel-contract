@@ -1,3 +1,7 @@
+tolk 1.0
+
+import "storage"
+
 const OP_TOP_UP_BALANCE = 0x593e3893;
 const OP_INIT_CHANNEL = 0x79ae99b5;
 const OP_COOPERATIVE_CLOSE = 0xd2b1eeeb;
