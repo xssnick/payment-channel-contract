@@ -4,6 +4,7 @@ import "@stdlib/tvm-dicts"
 import "@stdlib/tvm-lowlevel"
 import "storage.tolk"
 import "types.tolk"
+import "fees.tolk"
 import "errors.tolk"
 import "messages.tolk"
 
