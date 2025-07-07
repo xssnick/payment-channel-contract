@@ -109,22 +109,6 @@ fun PaymentConfigJetton.parse(c: cell): PaymentConfigJetton {
     return PaymentConfigJetton.fromCell(c);
 }
 
-/*
-@inline
-fun PaymentConfig.update(mutate self) {
-    self.ref = beginCell()
-        .storeCoins(self.storageFee)
-        .storeAddress(self.addressA)
-        .storeAddress(self.addressB)
-        .storeUint(3, 2) // jetton type
-        .storeRef(beginCell()
-        .storeAddress(self.jettonRoot)
-        .storeAddress(self.jettonWallet)
-        .endCell())
-        .endCell();
-}
-*/
-
 @inline
 fun Balance.parse(c: cell): Balance {
     return Balance.fromCell(c);

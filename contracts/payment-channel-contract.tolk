@@ -93,23 +93,6 @@ fun sendPayout(config: PaymentConfig, sAddr: address, amount: int, payload: buil
     return fee;
 }
 
-/*
-@inline
-fun sendPayoutTon(sAddr: slice, amount: int, channelId: int, payload: WithdrawNotification | ChannelClosedNotification, flags: int) {
-    sendMessage(
-        beginCell()
-            .storeUint(NON_BOUNCEABLE, 6)
-            .storeSlice(sAddr)
-            .storeCoins(amount)
-            .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
-            .storeMessageOp(op)
-            .storeUint(channelId, 128)
-        .endCell(),
-        flags
-    );
-}
-*/
-
 @inline
 fun createPayoutEC(ecId: int, sAddr: address, amount: int, payoutBody: builder, flags: int) {
     var currenciesToSend: dict = createEmptyDict();
@@ -125,20 +108,6 @@ fun createPayoutEC(ecId: int, sAddr: address, amount: int, payoutBody: builder, 
         }
     });
 
-    /*
-    sendMessage(
-        beginCell()
-            .storeUint(NON_BOUNCEABLE, 6)
-            .storeSlice(sAddr)
-            .storeCoins(FEE_EC_PAYOUT)
-            .storeDict(currenciesToSend)
-            .storeUint(0, 4 + 4 + 64 + 32 + 1 + 1)
-            .storeMessageOp(op)
-            .storeUint(channelId, 128)
-        .endCell(),
-        flags
-    );
-    */
 }
 
 @inline
@@ -163,31 +132,6 @@ fun createPayoutJetton(wallet: address, sAddr: address, amount: int, payload: bu
                 forwardPayload: payload
         }
     });
-
-    /*
-    sendMessage(
-        beginCell()
-            .storeUint(NON_BOUNCEABLE, 6)
-            .storeSlice(wallet)
-            .storeCoins(FEE_JETTON_PAYOUT)
-            .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1)
-            .storeBool(true)
-            .storeRef(beginCell()
-                .storeMessageOp(OP_JETTON_TRANSFER)
-                .storeMessageQueryId(0)
-                .storeCoins(amount)
-                .storeSlice(sAddr)
-                .storeSlice(sAddr)
-                .storeMaybeRef(null)
-                .storeCoins(FEE_JETTON_FORWARD)
-                .storeBool(false)
-                .storeMessageOp(op)
-                .storeUint(channelId, 128)
-            .endCell())
-        .endCell(),
-        flags
-    );
-    */
 }
 
 fun Channel.closeChannel(mutate self, unpackedBalance: Balance) {
@@ -604,28 +548,6 @@ fun sendJettonsBack(dest: address, amount: int, jettonWallet: address) {
     });
 
     msg.send(SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE | SEND_MODE_IGNORE_ERRORS);
-    /*
-    sendMessage(
-        beginCell()
-            .storeUint(NON_BOUNCEABLE, 6)
-            .storeSlice(jettonWallet)
-            .storeCoins(0)
-            .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1)
-            .storeBool(true)
-            .storeRef(beginCell()
-                .storeMessageOp(OP_JETTON_TRANSFER)
-                .storeMessageQueryId(0)
-                .storeCoins(amount)
-                .storeSlice(dest)
-                .storeSlice(dest)
-                .storeMaybeRef(null)
-                .storeCoins(1)
-                .storeBool(false)
-            .endCell())
-        .endCell(),
-        SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE | SEND_MODE_IGNORE_ERRORS
-    );
-    */
 }
 
 @inline_ref
@@ -647,19 +569,6 @@ fun sendExcess(channel: Channel, dest: address) {
    });
 
    msg.send(SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS);
-   /*
-   sendMessage(
-        beginCell()
-            .storeUint(NON_BOUNCEABLE, 6)
-            .storeSlice(dest)
-            .storeCoins(0)
-            .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
-            .storeMessageOp(OP_EXCESSES)
-            .storeMessageQueryId(0)
-        .endCell(),
-       SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS
-    );
-    */
 }
 
 @inline_ref
