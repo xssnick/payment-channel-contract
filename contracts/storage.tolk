@@ -127,30 +127,11 @@ fun Channel.parse(c: cell): Channel {
 @inline_ref
 fun Channel.serialize(self): cell {
     return self.toCell();
-    /*
-    return beginCell()
-        .storeBool(self.inited)
-        .storeRef(self.balance.serialize())
-        .storeUint(self.keyA, 256)
-        .storeUint(self.keyB, 256)
-        .storeUint(self.id, 128)
-        .storeRef(self.closureConfig.serialize())
-        .storeUint(self.commitedSeqnoA, 32)
-        .storeUint(self.commitedSeqnoB, 32)
-        .storeMaybeRef(self.quarantine)
-        .storeRef(self.paymentConfig.serialize())
-        .endCell();
-    */
 }
 
 @inline_ref
 fun Semichannel.parse(c: cell, id: uint128, key: uint256): Semichannel {
     var signedState = SemichannelSigned.fromCell(c);
-    /*
-    var signature: slice = cs.loadBits(512);
-    var semiChannelState: cell = cs.preloadRef();
-    cs = semiChannelState.beginParse();
-    */
     assert(isSignatureValid(signedState.channel.hash(), signedState.signature as slice, key)) throw ERROR_NOT_AUTHORIZED;
     var unpackedChannel = SemichannelPacked.fromCell(signedState.channel);
 

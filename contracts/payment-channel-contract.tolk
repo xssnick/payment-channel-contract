@@ -648,20 +648,7 @@ fun requestJettonWallet(jettonRoot: address) {
             include_address: false
         }
     });
-    request.send(0);
-    /*
-    sendMessage(beginCell()
-        .storeUint(NON_BOUNCEABLE, 6)
-        .storeSlice(channel.paymentConfig.jettonRoot)
-        .storeCoins(FEE_JETTON_WALLET_PROVIDE)
-        .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
-        .storeMessageOp(OP_JETTON_PROVIDE_WALLET_ADDRESS)
-        .storeMessageQueryId(0)
-        .storeSlice(contract.getAddress())
-        .storeBool(false)
-    .endCell(), 0);
-    */
-    return;
+    return request.send(0);
 }
 
 get getChannelState(): int {
