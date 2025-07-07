@@ -653,7 +653,7 @@ fun requestJettonWallet(jettonRoot: address) {
     return request.send(0);
 }
 
-get getChannelState(): int {
+get fun getChannelState(): int {
     var channel = Channel.parse(contract.getData());
 
     if (!channel.inited) {
@@ -679,7 +679,7 @@ get getChannelState(): int {
     return STATE_AWAITING_FINALIZATION;
 }
 
-get getChannelData() {
+get fun getChannelData() {
     var channel = Channel.parse(contract.getData());
 
     var channelBalance = channel.balance.load();
