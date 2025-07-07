@@ -76,7 +76,7 @@ fun sendPayout(config: PaymentConfig, sAddr: address, amount: int, payload: buil
                 dest: sAddr,
                 value: amount,
                 body: UnsafeBodyNoRef{
-                    bodyForceNoRef: payload
+                    forceInline: payload
                 }
             })
         }
@@ -106,7 +106,7 @@ fun createPayoutEC(ecId: int, sAddr: address, amount: int, payoutBody: builder, 
         dest: sAddr,
         value: (FEE_EC_PAYOUT, currenciesToSend),
         body: UnsafeBodyNoRef {
-            bodyForceNoRef: payoutBody
+            forceInline: payoutBody
         }
     });
 
