@@ -209,7 +209,7 @@ fun Channel.cooperativeCommit(mutate self, msg: CooperativeCommitMessage, msgVal
     self.commitedSeqnoB = commitBody.seqnoB;
 
     if (self.quarantine != null) {
-        var qua = Quarantine.parse(self.quarantine);
+        var qua = self.quarantine.load();
         if ((commitBody.seqnoA > qua.stateA.seqno) || (commitBody.seqnoB > qua.stateB.seqno)) {
             // quarantinened state is older than newly commited one, drop it
             self.quarantine = null;
@@ -293,7 +293,7 @@ fun challengeQuarantinedState(channel: Channel, msg: ChallengeQuarantineMessage)
 
     verifyStates(channel.commitedSeqnoA, channel.commitedSeqnoB, a, b);
 
-    var qua = Quarantine.parse(channel.quarantine);
+    var qua = channel.quarantine.load();
     var closure = channel.closureConfig.load();
 
     assert(qua.startedAt + closure.quarantineDuration > blockchain.now()) throw ERROR_TOO_LATE_FOR_QUARANTINE_CHALLENGE;
@@ -337,7 +337,7 @@ fun settleConditionals(channel: Channel, msg: SettleConditionalsMessage) {
 
     var conditionals = msg.signedBody.loadAny<SettleConditionalsBody>();
 
-    var qua = Quarantine.parse(channel.quarantine);
+    var qua = channel.quarantine.load();
     var closure = channel.closureConfig.load();
 
     var quarantineeFinished: int = qua.startedAt + closure.quarantineDuration;
@@ -384,7 +384,7 @@ fun settleConditionals(channel: Channel, msg: SettleConditionalsMessage) {
 fun Channel.finishUncooperativeClose(mutate self) {
     assert(self.quarantine != null) throw ERROR_NO_QUARANTINED_STATE;
 
-    var qua = Quarantine.parse(self.quarantine);
+    var qua = self.quarantine.load();
     var closure = self.closureConfig.load();
 
     assert(qua.startedAt +
@@ -661,7 +661,7 @@ get getChannelState(): int {
         return STATE_OPEN;
     }
 
-    var qua = Quarantine.parse(channel.quarantine);
+    var qua = channel.quarantine.load();
     var closure = channel.closureConfig.load();
 
     if (qua.startedAt + closure.quarantineDuration > blockchain.now()) {

@@ -81,7 +81,7 @@ struct Channel {
     commitedSeqnoA: uint64;
     commitedSeqnoB: uint64;
 
-    quarantine: cell?;
+    quarantine: Cell<Quarantine>?;
     paymentConfig: Cell<PaymentConfig>;
 }
 
@@ -162,7 +162,7 @@ fun Quarantine.parse(c: cell): Quarantine {
 }
 
 @inline_ref
-fun Quarantine.serialize(self): cell {
+fun Quarantine.serialize(self): Cell<Quarantine>{
     return self.toCell();
 }
 
