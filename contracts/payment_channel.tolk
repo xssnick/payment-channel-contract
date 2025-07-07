@@ -42,10 +42,10 @@ fun initChannel(channel: Channel, msg: slice) {
             balanceUnpacked.withdrawA | balanceUnpacked.withdrawB) == 0) throw ERROR_INCORRECT_INITIAL_BALANCE;
 
     var storageMin: int = FEE_MIN_BALANCE;
-    if(paymentConfigUnpacked.customCurrency != null) {
-        if (paymentConfigUnpacked.customCurrency is Cell<PaymentConfigJetton>) {
+    if(!(paymentConfigUnpacked.customCurrency is PaymentConfigTon)) {
+        if (paymentConfigUnpacked.customCurrency is PaymentConfigJettonStorage) {
             // must keep fee for final withdrawal
-            var jettonConfig = PaymentConfigJetton.fromCell(paymentConfigUnpacked.customCurrency);
+            var jettonConfig = PaymentConfigJetton.fromCell(paymentConfigUnpacked.customCurrency.jettonCell);
             storageMin += (FEE_JETTON_PAYOUT * 2) + FEE_JETTON_WALLET_PROVIDE;
             if (jettonConfig.jettonWallet.isNone()) {
                 // request our wallet address from jetton master
@@ -70,7 +70,7 @@ fun sendPayout(config: PaymentConfig, sAddr: address, amount: int, payload: buil
     var fee = 0;
 
     match(config.customCurrency) {
-        null =>  {
+        PaymentConfigTon =>  {
             msg = createMessage({
                 bounce: false,
                 dest: sAddr,
@@ -80,8 +80,8 @@ fun sendPayout(config: PaymentConfig, sAddr: address, amount: int, payload: buil
                 }
             })
         }
-        Cell<PaymentConfigJetton> => {
-                var jettonConfig = PaymentConfigJetton.fromCell(config.customCurrency);
+        PaymentConfigJettonStorage => {
+                var jettonConfig = PaymentConfigJetton.fromCell(config.customCurrency.jettonCell);
                 msg = createPayoutJetton(jettonConfig.jettonWallet, sAddr, amount, payload, flags);
                 fee = FEE_JETTON_PAYOUT;
         }
@@ -288,7 +288,6 @@ fun Channel.cooperativeCommit(mutate self, msg: slice, msgValue: int) {
 
     var withdrawAmount = withdrawB - unpackedBalance.withdrawB;
     assert(withdrawAmount >= 0) throw ERROR_WITHDRAW_REGRESS;
-    var withdrawMade = false;
     var unpackedPaymentConfig: PaymentConfig? = null;
 
     if (withdrawAmount > 0) {
@@ -298,31 +297,26 @@ fun Channel.cooperativeCommit(mutate self, msg: slice, msgValue: int) {
             channelId: self.id
         });
         msgValue -= sendPayout(unpackedPaymentConfig, unpackedPaymentConfig.addressB, withdrawAmount, withdrawMsg, 0);
-        withdrawMade = true;
     }
 
     withdrawAmount = withdrawA - unpackedBalance.withdrawA;
     assert(withdrawAmount >= 0) throw ERROR_WITHDRAW_REGRESS;
     if (withdrawAmount > 0) {
         unpackedBalance.withdrawA = withdrawA;
-        var withdrawMsg = beginCell().storeAny(WithdrawNotification {
-            channelId: self.id
-        });
         if(unpackedPaymentConfig == null) {
             unpackedPaymentConfig = PaymentConfig.fromCell(self.paymentConfig);
         }
 
+        var withdrawMsg = beginCell().storeAny(WithdrawNotification {
+            channelId: self.id
+        });
         msgValue -= sendPayout(unpackedPaymentConfig,unpackedPaymentConfig.addressA, withdrawAmount, withdrawMsg, 0);
-
-        withdrawMade = true;
     }
 
     assert(msgValue >= 0) throw ERROR_AMOUNT_NOT_COVERS_FEE;
     assert(unpackedBalance.calcA() >= 0 && unpackedBalance.calcB() >= 0) throw ERROR_NOT_ENOUGH_BALANCE;
 
-    if(withdrawMade) {
-        self.balance = unpackedBalance.toCell();
-    }
+    self.balance = unpackedBalance.toCell();
 
     contract.setData(self.serialize());
 }
@@ -517,7 +511,7 @@ fun onInternalMessage(_: int, amount: int, inMsgFull: cell, inMsg: slice) {
             var ecAmount: int = v!.loadVarUInt32();
             channel.topUpBalance(ecAmount, inMsg);
         } else {
-            assert(channel.paymentConfig.currencyType == CURRENCY_TYPE_TON) throw ERROR_INVALID_CURRENCY_TYPE;
+            assert(unpackedPaymentConfig.customCurrency is PaymentConfigTon) throw ERROR_INVALID_CURRENCY_TYPE;
             assert(amount >= FEE_TON_ACCEPT) throw ERROR_AMOUNT_NOT_COVERS_FEE;
             channel.topUpBalance(amount - FEE_TON_ACCEPT, inMsg);
         }
@@ -557,9 +551,9 @@ fun acceptJettons(channel: Channel, sender: address, tonAmount: int, payload: sl
                                      sender:MsgAddress forward_payload:(Either Cell ^Cell)
                                      = InternalMsgBody;
     */
-    var jettonCell = PaymentConfig.fromCell(channel.paymentConfig).customCurrency;
-    assert(jettonCell is Cell<PaymentConfigJetton>) throw ERROR_INVALID_CURRENCY_TYPE;
-    var jettonConfig = PaymentConfigJetton.fromCell(jettonCell);
+    var customCurrency = PaymentConfig.fromCell(channel.paymentConfig).customCurrency;
+    assert(customCurrency is PaymentConfigJettonStorage) throw ERROR_INVALID_CURRENCY_TYPE;
+    var jettonConfig = PaymentConfigJetton.fromCell(customCurrency.jettonCell);
 
     payload.skipBits(64);
     var jettonAmount: int = payload.loadCoins();
@@ -637,7 +631,7 @@ fun sendExcess(channel: Channel, dest: address) {
     var paymentConfig = PaymentConfig.fromCell(channel.paymentConfig);
     var reserve: int = paymentConfig.storageFee;
 
-    if (paymentConfig.customCurrency == null) {
+    if (paymentConfig.customCurrency is PaymentConfigTon) {
         var channelBalance = Balance.fromCell(channel.balance);
         reserve += channelBalance.calcA() + channelBalance.calcB();
     }
@@ -676,16 +670,18 @@ fun assignJettonWallet(channel: Channel, sender: address, payload: slice) {
     payload.skipBits(64);
 
     var paymentConfig = PaymentConfig.fromCell(channel.paymentConfig);
-    var jettonConfig  = match(paymentConfig.customCurrency) {
-        null => throw(42),
-        PaymentConfigExtra => throw(42),
-        Cell<PaymentConfigJetton> => PaymentConfigJetton.fromCell(paymentConfig.customCurrency),
-    };
+    assert(paymentConfig.customCurrency is PaymentConfigJettonStorage, 42);
+    var jettonConfig  = PaymentConfigJetton.fromCell(paymentConfig.customCurrency.jettonCell);
+
     assert(jettonConfig.jettonWallet.isNone()) throw ERROR_JETTON_WALLET_ALREADY_INSTALLED;
     assert(jettonConfig.jettonRoot == sender) throw ERROR_NOT_AUTHORIZED;
 
     jettonConfig.jettonWallet = payload.loadAddress();
-    paymentConfig.customCurrency = jettonConfig.toCell();
+
+    paymentConfig.customCurrency = PaymentConfigJettonStorage {
+        jettonCell: jettonConfig.toCell()
+    };
+
     channel.paymentConfig = paymentConfig.toCell();
 
     return contract.setData(channel.serialize());

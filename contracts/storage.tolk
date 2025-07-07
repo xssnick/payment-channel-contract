@@ -2,14 +2,18 @@ import "errors.tolk"
 
 const TAG_STATE = 0x43685374;
 
+struct SemichannelInternal {
+    data: SemichannelBody;
+    counterpartyData: Cell<SemichannelBody>?;
+}
 struct Semichannel {
     data: SemichannelBody;
     counterpartyData: SemichannelBody;
 }
 struct SemichannelPacked {
     tag: uint32;
-    channelId: uint128;
-    state: Semichannel;
+    id: uint128;
+    state: SemichannelInternal;
 }
 
 struct SemichannelSigned {
@@ -41,17 +45,21 @@ struct PaymentConfigJetton {
     jettonRoot: address;
     jettonWallet: address;
 }
-struct PaymentConfigExtra {
+// Tags for Maybe(Either) workaround
+struct (0b10)PaymentConfigExtra {
     ecId: uint32;
 }
-
-type CustomCurrency = PaymentConfigExtra | Cell<PaymentConfigJetton>;
+struct (0b0)PaymentConfigTon {}
+struct(0b11) PaymentConfigJettonStorage {
+    jettonCell: Cell<PaymentConfigJetton>;
+}
+type CustomCurrency = PaymentConfigTon | PaymentConfigExtra | PaymentConfigJettonStorage;
 
 struct PaymentConfig {
     storageFee: coins;
     addressA: address;
     addressB: address;
-    customCurrency: CustomCurrency? 
+    customCurrency: CustomCurrency
 }
 
 struct Balance {
@@ -149,17 +157,19 @@ fun Channel.serialize(self): cell {
 
 @inline_ref
 fun Semichannel.parse(c: cell, id: uint128, key: uint256): Semichannel {
-    var cs = c.beginParse();
-    // var signedState = SemichannelSigned.fromCell(c);
+    var signedState = SemichannelSigned.fromCell(c);
+    /*
     var signature: slice = cs.loadBits(512);
     var semiChannelState: cell = cs.preloadRef();
-    assert(isSignatureValid(semiChannelState.hash(), signature, key)) throw ERROR_NOT_AUTHORIZED;
     cs = semiChannelState.beginParse();
+    */
+    assert(isSignatureValid(signedState.channel.hash(), signedState.signature as slice, key)) throw ERROR_NOT_AUTHORIZED;
+    var unpackedChannel = SemichannelPacked.fromCell(signedState.channel);
 
-    assert(cs.loadUint(32) == TAG_STATE) throw ERROR_WRONG_TAG;
-    assert(id == cs.loadUint(128)) throw ERROR_WRONG_CHANNEL_ID;
+    assert(unpackedChannel.tag == TAG_STATE) throw ERROR_WRONG_TAG;
+    assert(unpackedChannel.id  == id) throw ERROR_WRONG_CHANNEL_ID;
 
-    var data = cs.loadSemichannelBody();
+    var data = unpackedChannel.state.data;
 
     var counterpartyData = SemichannelBody{
         seqno: 0,
@@ -167,9 +177,8 @@ fun Semichannel.parse(c: cell, id: uint128, key: uint256): Semichannel {
         conditionalsHash: 0,
     };
 
-    var cnpData = cs.loadMaybeRef();
-    if (cnpData != null) {
-        counterpartyData = cnpData.beginParse().loadSemichannelBody();
+    if (unpackedChannel.state.counterpartyData != null) {
+        counterpartyData = SemichannelBody.fromCell(unpackedChannel.state.counterpartyData);
     }
 
     return Semichannel{
@@ -190,7 +199,7 @@ fun Quarantine.serialize(self): cell {
 
 @inline
 fun slice.loadSemichannelBody(mutate self): SemichannelBody {
-    return SemichannelBody.fromSlice(self);
+    return self.loadAny<SemichannelBody>();
 }
 
 @inline
