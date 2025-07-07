@@ -45,16 +45,13 @@ struct PaymentConfigJetton {
     jettonRoot: address
     jettonWallet: address
 }
-// Tags for Maybe(Either) workaround
-struct (0b10)PaymentConfigExtra {
+struct PaymentConfigExtra {
     ecId: uint32
 }
-struct (0b0)PaymentConfigTon {}
-struct(0b11) PaymentConfigJettonStorage {
+struct PaymentConfigJettonStorage {
     jettonCell: Cell<PaymentConfigJetton>
 }
 type CustomCurrency =
-    | PaymentConfigTon
     | PaymentConfigExtra
     | PaymentConfigJettonStorage
 
@@ -62,7 +59,7 @@ struct PaymentConfig {
     storageFee: coins
     addressA: address
     addressB: address
-    customCurrency: CustomCurrency
+    customCurrency: CustomCurrency?
 }
 
 struct Balance {

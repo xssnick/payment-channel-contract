@@ -42,7 +42,7 @@ fun initChannel(channel: Channel, msg: InitChannelMessage) {
             balanceUnpacked.withdrawA | balanceUnpacked.withdrawB) == 0) throw ERROR_INCORRECT_INITIAL_BALANCE;
 
     var storageMin: int = FEE_MIN_BALANCE;
-    if(!(paymentConfigUnpacked.customCurrency is PaymentConfigTon)) {
+    if(paymentConfigUnpacked.customCurrency != null) {
         if (paymentConfigUnpacked.customCurrency is PaymentConfigJettonStorage) {
             // must keep fee for final withdrawal
             var jettonConfig = paymentConfigUnpacked.customCurrency.jettonCell.load();
@@ -70,7 +70,7 @@ fun sendPayout(config: PaymentConfig, sAddr: address, amount: int, payload: buil
     var fee = 0;
 
     match(config.customCurrency) {
-        PaymentConfigTon =>  {
+        null =>  {
             msg = createMessage({
                 bounce: false,
                 dest: sAddr,
@@ -445,7 +445,7 @@ fun onInternalMessage(in: InMessage) {
                 var ecAmount: int = v!.loadVarUInt32();
                 channel.topUpBalance(ecAmount, msg.isA);
             } else {
-                assert(unpackedPaymentConfig.customCurrency is PaymentConfigTon) throw ERROR_INVALID_CURRENCY_TYPE;
+                assert(unpackedPaymentConfig.customCurrency == null) throw ERROR_INVALID_CURRENCY_TYPE;
                 assert(in.valueCoins >= FEE_TON_ACCEPT) throw ERROR_AMOUNT_NOT_COVERS_FEE;
                 channel.topUpBalance(in.valueCoins - FEE_TON_ACCEPT, msg.isA);
             }
@@ -549,7 +549,7 @@ fun sendExcess(channel: Channel, dest: address) {
     var paymentConfig = lazy channel.paymentConfig.load();
     var reserve: int = paymentConfig.storageFee;
 
-    if (paymentConfig.customCurrency is PaymentConfigTon) {
+    if (paymentConfig.customCurrency == null) {
         var channelBalance = lazy channel.balance.load();
         reserve += channelBalance.calcA() + channelBalance.calcB();
     }
