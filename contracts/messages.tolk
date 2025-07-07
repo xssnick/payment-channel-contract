@@ -45,21 +45,75 @@ struct (0x0f8a7ea5) AskToTransfer {
     forwardPayload: builder | cell
 }
 
-struct (0x7362d09c) TransferNotificationForRecipient {
+struct (0x7362d09c) JettonTransferNotification {
     queryId: uint64,
     jettonAmount: coins,
-    transferInitiator: address,
+    jettonSender: address,
     forwardPayload: ForwardPayloadRemainder
 }
 
 struct (0x2c76b973) ProvideWalletAddress {
-    queryId: uint64,
-    ownerAddress: address,
+    queryId: uint64;
+    ownerAddress: address;
     include_address: bool
 }
 
-struct PayoutResult {
-    msg: OutMessage,
-    fee: int
+/* TEP-89
+  take_wallet_address#d1735400 query_id:uint64 wallet_address:MsgAddress
+                               owner_address:(Maybe ^MsgAddress)
+                               = InternalMsgBody;
+*/
+
+struct (0xd1735400) TakeWalletAddressMessage {
+    queryId: uint64;
+    wallet_address: address;
+    // Don't care about the rest of the message
+    rest: RemainingBitsAndRefs;
 }
 
+struct ChannelMessageId {
+    tag: uint32;
+    id: uint128;
+}
+
+struct (0x79ae99b5) InitChannelMessage {
+    isA: bool;
+    signature: bits512;
+    signedBody: RemainingBitsAndRefs;
+}
+struct (0x593e3893) TopUpMessage {
+    isA: bool
+}
+
+struct (0x076bfdf1) CooperativeCommitMessage {
+    signatureA: cell;
+    signatureB: cell;
+    signedBody: RemainingBitsAndRefs;
+}
+
+struct (0xd2b1eeeb) CooperativeCloseMessage {
+    signatureA: cell;
+    signatureB: cell;
+    signedBody: RemainingBitsAndRefs;
+}
+
+struct (0x8175e15d) StartUncooperativeCloseMessage {
+    signedByA: bool;
+    signature: bits512;
+    signedBody: RemainingBitsAndRefs;
+}
+struct (0x25432a91) FinishUncooperativeCloseMessage {
+    // Only OP tag
+}
+
+struct (0x9a77c0db) ChallengeQuarantineMessage {
+    challengedByA: bool;
+    signature: bits512;
+    signedBody: RemainingBitsAndRefs;
+}
+
+struct (0x56c39b4c) SettleConditionalsMessage {
+    fromA: bool;
+    signature: bits512;
+    signedBody: RemainingBitsAndRefs;
+}
