@@ -53,7 +53,10 @@ struct (0b0)PaymentConfigTon {}
 struct(0b11) PaymentConfigJettonStorage {
     jettonCell: Cell<PaymentConfigJetton>;
 }
-type CustomCurrency = PaymentConfigTon | PaymentConfigExtra | PaymentConfigJettonStorage;
+type CustomCurrency =
+    | PaymentConfigTon
+    | PaymentConfigExtra
+    | PaymentConfigJettonStorage;
 
 struct PaymentConfig {
     storageFee: coins;

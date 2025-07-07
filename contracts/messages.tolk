@@ -37,7 +37,9 @@ struct (0xdddc88ba) ChannelClosedNotification {
 	channelId: uint128
 }
 
-type PayoutMessage = WithdrawNotification | ChannelClosedNotification;
+type PayoutMessage =
+    | WithdrawNotification
+    | ChannelClosedNotification;
 
 struct (0x0f8a7ea5) AskToTransfer {
     queryId: uint64,

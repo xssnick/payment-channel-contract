@@ -413,7 +413,8 @@ fun Channel.finishUncooperativeClose(mutate self) {
     self.closeChannel(unpackedBalance);
 }
 
-type AllowedMessages = TopUpMessage
+type AllowedMessages =
+    | TopUpMessage
     | JettonTransferNotification
     | TakeWalletAddressMessage
     | InitChannelMessage
