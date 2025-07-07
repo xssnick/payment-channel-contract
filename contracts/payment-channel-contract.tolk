@@ -35,7 +35,7 @@ fun initChannel(channel: Channel, msg: InitChannelMessage) {
     var paymentConfigUnpacked = channel.paymentConfig.load();
 
     // must be 0, we handle adjustments in topup and withdraw
-    assert((balanceUnpacked.sentA | balanceUnpacked.sentB | 
+    assert((balanceUnpacked.sentA | balanceUnpacked.sentB |
             balanceUnpacked.depositA | balanceUnpacked.depositB |
             balanceUnpacked.withdrawA | balanceUnpacked.withdrawB) == 0) throw ERROR_INCORRECT_INITIAL_BALANCE;
 
@@ -561,14 +561,14 @@ fun sendExcess(channel: Channel, dest: address) {
     }
     reserveToncoinsOnBalance(reserve, RESERVE_MODE_AT_MOST);
 
-   var msg = createMessage({
-      bounce: false, 
-      dest: dest,
-      value: 0,
-      body: (OP_EXCESSES as uint32, 0 as uint64)
-   });
+    var msg = createMessage({
+       bounce: false,
+       dest: dest,
+       value: 0,
+       body: (OP_EXCESSES as uint32, 0 as uint64)
+    });
 
-   msg.send(SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS);
+    msg.send(SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS);
 }
 
 @inline_ref
@@ -673,7 +673,7 @@ get getChannelState(): int {
         closure.closeDuration > blockchain.now()) {
         return STATE_SETTLING_CONDITIONALS;
     }
-    
+
     return STATE_AWAITING_FINALIZATION;
 }
 
