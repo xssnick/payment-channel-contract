@@ -454,7 +454,26 @@ describe('PaymentChannel Extra', () => {
             }
         }
     });
+    it('should not be able to top up with TON', async () => {
+        const stateBefore = blockchain.snapshot();
 
+        let depoAmount = BigInt(getRandomInt(10, 100)) * toNano('0.01');
+        try {
+            for(let testWallet of [walletA, walletB]) {
+                const dataBefore = await tonChannel.getChannelData();
+                const res = await testWallet.send({
+                    to: tonChannel.address,
+                    body: PaymentChannel.topUpMessage(testWallet === walletA),
+                    value: depoAmount
+                });
+
+                const dataAfter = await tonChannel.getChannelData();
+                expect(dataBefore.balance).toEqual(dataAfter.balance);
+            }
+        } finally {
+            await blockchain.loadFrom(stateBefore);
+        }
+    });
     it('should not be able to re-deploy', async () => {
             const initMsg   = PaymentChannel.channelInitMessage(true, keysA.secretKey, tonChannelConfig.id);
 
