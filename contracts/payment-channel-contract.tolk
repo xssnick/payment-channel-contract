@@ -439,55 +439,55 @@ fun onInternalMessage(_: int, amount: int, inMsgFull: cell, inMsg: slice) {
     var msg = AllowedMessages.fromSlice(inMsg);
 
     match(msg) {
-    TopUpMessage => {
-        var unpackedPaymentConfig = channel.paymentConfig.load();
-        if (unpackedPaymentConfig.customCurrency is PaymentConfigExtra) {
-            assert(amount >= FEE_EC_ACCEPT) throw ERROR_AMOUNT_NOT_COVERS_FEE;
+        TopUpMessage => {
+            var unpackedPaymentConfig = channel.paymentConfig.load();
+            if (unpackedPaymentConfig.customCurrency is PaymentConfigExtra) {
+                assert(amount >= FEE_EC_ACCEPT) throw ERROR_AMOUNT_NOT_COVERS_FEE;
 
-            var ec: dict = cs.loadDict();
-            var (v: slice?, ok: bool) = ec.uDictDeleteAndGet(32, unpackedPaymentConfig.customCurrency.ecId);
-            // If dictionary contains more than one EC - reject
-            assert(ok && ec == null) throw ERROR_INVALID_EC_ID;
+                var ec: dict = cs.loadDict();
+                var (v: slice?, ok: bool) = ec.uDictDeleteAndGet(32, unpackedPaymentConfig.customCurrency.ecId);
+                // If dictionary contains more than one EC - reject
+                assert(ok && ec == null) throw ERROR_INVALID_EC_ID;
 
-            var ecAmount: int = v!.loadVarUInt32();
-            channel.topUpBalance(ecAmount, msg.isA);
-        } else {
-            assert(unpackedPaymentConfig.customCurrency is PaymentConfigTon) throw ERROR_INVALID_CURRENCY_TYPE;
-            assert(amount >= FEE_TON_ACCEPT) throw ERROR_AMOUNT_NOT_COVERS_FEE;
-            channel.topUpBalance(amount - FEE_TON_ACCEPT, msg.isA);
+                var ecAmount: int = v!.loadVarUInt32();
+                channel.topUpBalance(ecAmount, msg.isA);
+            } else {
+                assert(unpackedPaymentConfig.customCurrency is PaymentConfigTon) throw ERROR_INVALID_CURRENCY_TYPE;
+                assert(amount >= FEE_TON_ACCEPT) throw ERROR_AMOUNT_NOT_COVERS_FEE;
+                channel.topUpBalance(amount - FEE_TON_ACCEPT, msg.isA);
+            }
+        },
+        JettonTransferNotification => {
+            // return because custom excess handled inside
+            return acceptJettons(channel, sender, amount, msg);
+        },
+        TakeWalletAddressMessage =>  {
+            // no excess
+            return assignJettonWallet(channel, sender, msg.wallet_address);
+        },
+        CooperativeCommitMessage => {
+            channel.cooperativeCommit(msg, amount - FEE_COMMIT);
+        },
+        InitChannelMessage => {
+            initChannel(channel, msg);
+        },
+        CooperativeCloseMessage => {
+            // excess hadled in channelClose()
+            return channel.cooperativeClose(msg);
+        },
+        StartUncooperativeCloseMessage => {
+            startUncooperativeClose(channel, msg);
+        },
+        ChallengeQuarantineMessage => {
+            challengeQuarantinedState(channel, msg);
+        },
+        SettleConditionalsMessage => {
+            settleConditionals(channel, msg);
+        },
+        FinishUncooperativeCloseMessage => {
+            // excess hadled in channelClose()
+            return channel.finishUncooperativeClose();
         }
-    },
-    JettonTransferNotification => {
-        // return because custom excess handled inside
-        return acceptJettons(channel, sender, amount, msg);
-    },
-    TakeWalletAddressMessage =>  {
-        // no excess
-        return assignJettonWallet(channel, sender, msg.wallet_address);
-    },
-    CooperativeCommitMessage => {
-        channel.cooperativeCommit(msg, amount - FEE_COMMIT);
-    },
-    InitChannelMessage => {
-        initChannel(channel, msg);
-    },
-    CooperativeCloseMessage => {
-        // excess hadled in channelClose()
-        return channel.cooperativeClose(msg);
-    },
-    StartUncooperativeCloseMessage => {
-        startUncooperativeClose(channel, msg);
-    },
-    ChallengeQuarantineMessage => {
-        challengeQuarantinedState(channel, msg);
-    },
-    SettleConditionalsMessage => {
-        settleConditionals(channel, msg);
-    },
-    FinishUncooperativeCloseMessage => {
-        // excess hadled in channelClose()
-        return channel.finishUncooperativeClose();
-    }
     }
 
     sendExcess(channel, sender);
