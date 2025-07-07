@@ -160,7 +160,7 @@ fun Channel.closeChannel(mutate self, unpackedBalance: Balance) {
     return contract.setData(self.serialize());
 }
 
-@inline_ref
+@inline
 fun Channel.cooperativeClose(mutate self, msg: CooperativeCloseMessage) {
     var hash: int = msg.signedBody.hash();
 
@@ -187,7 +187,7 @@ fun Channel.cooperativeClose(mutate self, msg: CooperativeCloseMessage) {
     self.closeChannel(unpackedBalance);
 }
 
-@inline_ref
+@inline
 fun Channel.cooperativeCommit(mutate self, msg: CooperativeCommitMessage, msgValue: int) {
     var hash: int = msg.signedBody.hash();
 
@@ -253,7 +253,7 @@ fun Channel.cooperativeCommit(mutate self, msg: CooperativeCommitMessage, msgVal
     contract.setData(self.serialize());
 }
 
-@inline_ref
+@inline
 fun startUncooperativeClose(channel: Channel, msg: StartUncooperativeCloseMessage) {
     assert(channel.quarantine == null) throw ERROR_QUARANTINE_ALREADY_ACTIVE;
     assert(isSignatureValid(msg.signedBody.hash(), msg.signature as slice, msg.signedByA ? channel.keyA : channel.keyB)) throw ERROR_NOT_AUTHORIZED;
@@ -278,7 +278,7 @@ fun startUncooperativeClose(channel: Channel, msg: StartUncooperativeCloseMessag
     return contract.setData(channel.serialize());
 }
 
-@inline_ref
+@inline
 fun challengeQuarantinedState(channel: Channel, msg: ChallengeQuarantineMessage) {
     assert(channel.quarantine != null) throw ERROR_NO_QUARANTINED_STATE;
 
@@ -327,7 +327,7 @@ fun challengeQuarantinedState(channel: Channel, msg: ChallengeQuarantineMessage)
     return contract.setData(channel.serialize());
 }
 
-@inline_ref
+@inline
 fun settleConditionals(channel: Channel, msg: SettleConditionalsMessage) {
     assert(channel.quarantine != null) throw ERROR_NO_QUARANTINED_STATE;
 
@@ -380,7 +380,7 @@ fun settleConditionals(channel: Channel, msg: SettleConditionalsMessage) {
     return contract.setData(channel.serialize());
 }
 
-@inline_ref
+@inline
 fun Channel.finishUncooperativeClose(mutate self) {
     assert(self.quarantine != null) throw ERROR_NO_QUARANTINED_STATE;
 
@@ -571,7 +571,7 @@ fun sendExcess(channel: Channel, dest: address) {
     msg.send(SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS);
 }
 
-@inline_ref
+@inline
 fun assignJettonWallet(channel: Channel, sender: address, newWallet: address) {
     /* TEP-89
       take_wallet_address#d1735400 query_id:uint64 wallet_address:MsgAddress
@@ -631,7 +631,7 @@ fun Balance.calcB(self): int {
     return (self.depositB + self.sentA) - (self.sentB + self.withdrawB);
 }
 
-@inline_ref
+@inline
 fun requestJettonWallet(jettonRoot: address) {
     /* TEP-89
       provide_wallet_address#2c76b973 query_id:uint64 owner_address:MsgAddress
