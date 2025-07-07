@@ -221,7 +221,7 @@ fun Channel.cooperativeClose(mutate self, msg: CooperativeCloseMessage) {
 
     msg.signedBody.verifyMessageType(TAG_COOPERATIVE_CLOSE, self.id);
 
-    assert(isSignatureValid(hash, msg.signatureA.beginParse(), self.keyA) &
+    assert(isSignatureValid(hash, msg.signatureA.beginParse(), self.keyA) &&
         isSignatureValid(hash, msg.signatureB.beginParse(), self.keyB)) throw ERROR_NOT_AUTHORIZED;
 
     var closeBody = msg.signedBody.loadAny<CooperativeCloseBody>();
@@ -233,7 +233,7 @@ fun Channel.cooperativeClose(mutate self, msg: CooperativeCloseMessage) {
 
     var newSeqnoA: int = closeBody.seqnoA;
     var newSeqnoB: int = closeBody.seqnoB;
-    assert((self.commitedSeqnoA < newSeqnoA) &
+    assert((self.commitedSeqnoA < newSeqnoA) &&
         (self.commitedSeqnoB < newSeqnoB)) throw ERROR_SEQNO_REGRESS;
 
     self.commitedSeqnoA = newSeqnoA;
@@ -265,7 +265,7 @@ fun Channel.cooperativeCommit(mutate self, msg: CooperativeCommitMessage, msgVal
 
     if (self.quarantine != null) {
         var qua = Quarantine.parse(self.quarantine);
-        if ((commitBody.seqnoA > qua.stateA.seqno) | (commitBody.seqnoB > qua.stateB.seqno)) {
+        if ((commitBody.seqnoA > qua.stateA.seqno) || (commitBody.seqnoB > qua.stateB.seqno)) {
             // quarantinened state is older than newly commited one, drop it
             self.quarantine = null;
         }
@@ -358,10 +358,10 @@ fun challengeQuarantinedState(channel: Channel, msg: ChallengeQuarantineMessage)
     // or regenerate latest state with lower sent
     var misbehaviorDetected: bool = false;
     if (qua.committedbyA) {
-        misbehaviorDetected = (a.data.seqno > qua.stateA.seqno) | (a.data.sent > qua.stateA.sent);
+        misbehaviorDetected = (a.data.seqno > qua.stateA.seqno) || (a.data.sent > qua.stateA.sent);
         qua.stateA = a.data;
     } else {
-        misbehaviorDetected = (b.data.seqno > qua.stateB.seqno) | (b.data.sent > qua.stateB.sent);
+        misbehaviorDetected = (b.data.seqno > qua.stateB.seqno) || (b.data.sent > qua.stateB.sent);
         qua.stateB = b.data;
     }
     // only counterparty can report misbehavior
