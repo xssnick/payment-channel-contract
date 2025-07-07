@@ -7,14 +7,13 @@ import "types.tolk"
 import "errors.tolk"
 import "messages.tolk"
 
-fun Channel.topUpBalance(mutate self, amount: int, msg: slice) {
+fun Channel.topUpBalance(mutate self, amount: int, isA: bool) {
     assert(self.inited) throw ERROR_NOT_INITED;
     // we allow topup only when there is no disput
     assert(self.quarantine == null) throw ERROR_QUARANTINE_ALREADY_ACTIVE;
 
     var balanceUnpacked = Balance.fromCell(self.balance);
 
-    var isA: bool = msg.loadBool();
     if (isA) {
         balanceUnpacked.depositA += amount;
     } else {
@@ -25,13 +24,11 @@ fun Channel.topUpBalance(mutate self, amount: int, msg: slice) {
     contract.setData(self.serialize());
 }
 
-fun initChannel(channel: Channel, msg: slice) {
+fun initChannel(channel: Channel, msg: InitChannelMessage) {
     assert(!channel.inited) throw ERROR_ALREADY_INITED;
 
-    var isA: int = msg.loadInt(1);
-    var signature: slice = msg.loadBits(512);
-    assert(isSignatureValid(msg.hash(), signature, isA ? channel.keyA : channel.keyB)) throw ERROR_NOT_AUTHORIZED;
-    msg.verifyMessageType(TAG_INIT_CHANNEL, channel.id);
+    assert(isSignatureValid(msg.signedBody.hash(), msg.signature as slice, msg.isA ? channel.keyA : channel.keyB)) throw ERROR_NOT_AUTHORIZED;
+    msg.signedBody.verifyMessageType(TAG_INIT_CHANNEL, channel.id);
 
     var balanceUnpacked = Balance.fromCell(channel.balance);
     var paymentConfigUnpacked = PaymentConfig.fromCell(channel.paymentConfig);
@@ -219,26 +216,26 @@ fun Channel.closeChannel(mutate self, unpackedBalance: Balance) {
 }
 
 @inline_ref
-fun Channel.cooperativeClose(mutate self, msg: slice) {
-    var sigA: slice = msg.loadRef().beginParse();
-    var sigB: slice = msg.loadRef().beginParse();
-    var hash: int = msg.hash();
+fun Channel.cooperativeClose(mutate self, msg: CooperativeCloseMessage) {
+    var hash: int = msg.signedBody.hash();
 
-    msg.verifyMessageType(TAG_COOPERATIVE_CLOSE, self.id);
+    msg.signedBody.verifyMessageType(TAG_COOPERATIVE_CLOSE, self.id);
 
-    assert(isSignatureValid(hash, sigA, self.keyA) &
-        isSignatureValid(hash, sigB, self.keyB)) throw ERROR_NOT_AUTHORIZED;
+    assert(isSignatureValid(hash, msg.signatureA.beginParse(), self.keyA) &
+        isSignatureValid(hash, msg.signatureB.beginParse(), self.keyB)) throw ERROR_NOT_AUTHORIZED;
 
-    var newSentA: int = msg.loadCoins();
-    var newSentB: int = msg.loadCoins();
+    var ds = msg.signedBody;
+
+    var newSentA: int = ds.loadCoins();
+    var newSentB: int = ds.loadCoins();
 
     var unpackedBalance = Balance.fromCell(self.balance);
 
     unpackedBalance.sentA = newSentA;
     unpackedBalance.sentB = newSentB;
 
-    var newSeqnoA: int = msg.loadUint(64);
-    var newSeqnoB: int = msg.loadUint(64);
+    var newSeqnoA: int = ds.loadUint(64);
+    var newSeqnoB: int = ds.loadUint(64);
     assert((self.commitedSeqnoA < newSeqnoA) &
         (self.commitedSeqnoB < newSeqnoB)) throw ERROR_SEQNO_REGRESS;
 
@@ -249,25 +246,24 @@ fun Channel.cooperativeClose(mutate self, msg: slice) {
 }
 
 @inline_ref
-fun Channel.cooperativeCommit(mutate self, msg: slice, msgValue: int) {
-    var sigA: slice = msg.loadRef().beginParse();
-    var sigB: slice = msg.loadRef().beginParse();
-    var hash: int = msg.hash();
+fun Channel.cooperativeCommit(mutate self, msg: CooperativeCommitMessage, msgValue: int) {
+    var hash: int = msg.signedBody.hash();
 
-    msg.verifyMessageType(TAG_COOPERATIVE_COMMIT, self.id);
+    msg.signedBody.verifyMessageType(TAG_COOPERATIVE_COMMIT, self.id);
 
-    assert(isSignatureValid(hash, sigA, self.keyA) &
-        isSignatureValid(hash, sigB, self.keyB)) throw ERROR_NOT_AUTHORIZED;
+    assert(isSignatureValid(hash, msg.signatureA.beginParse(), self.keyA) &&
+        isSignatureValid(hash, msg.signatureB.beginParse(), self.keyB)) throw ERROR_NOT_AUTHORIZED;
 
-    var newSentA: int = msg.loadCoins();
-    var newSentB: int = msg.loadCoins();
+    var ds = msg.signedBody;
+    var newSentA: int = ds.loadCoins();
+    var newSentB: int = ds.loadCoins();
 
     var unpackedBalance = Balance.fromCell(self.balance);
     unpackedBalance.sentA = newSentA;
     unpackedBalance.sentB = newSentB;
 
-    var newSeqnoA: int = msg.loadUint(64);
-    var newSeqnoB: int = msg.loadUint(64);
+    var newSeqnoA: int = ds.loadUint(64);
+    var newSeqnoB: int = ds.loadUint(64);
     assert((self.commitedSeqnoA < newSeqnoA) &
         (self.commitedSeqnoB < newSeqnoB)) throw ERROR_SEQNO_REGRESS;
 
@@ -282,8 +278,8 @@ fun Channel.cooperativeCommit(mutate self, msg: slice, msgValue: int) {
         }
     }
 
-    var withdrawA: int = msg.loadCoins();
-    var withdrawB: int = msg.loadCoins();
+    var withdrawA: int = ds.loadCoins();
+    var withdrawB: int = ds.loadCoins();
 
 
     var withdrawAmount = withdrawB - unpackedBalance.withdrawB;
@@ -322,16 +318,15 @@ fun Channel.cooperativeCommit(mutate self, msg: slice, msgValue: int) {
 }
 
 @inline_ref
-fun startUncooperativeClose(channel: Channel, msg: slice) {
+fun startUncooperativeClose(channel: Channel, msg: StartUncooperativeCloseMessage) {
     assert(channel.quarantine == null) throw ERROR_QUARANTINE_ALREADY_ACTIVE;
-    var signedByA: bool = msg.loadBool();
-    var signature: slice = msg.loadBits(512);
-    assert(isSignatureValid(msg.hash(), signature, signedByA ? channel.keyA : channel.keyB)) throw ERROR_NOT_AUTHORIZED;
+    assert(isSignatureValid(msg.signedBody.hash(), msg.signature as slice, msg.signedByA ? channel.keyA : channel.keyB)) throw ERROR_NOT_AUTHORIZED;
 
-    msg.verifyMessageType(TAG_START_UNCOOPERATIVE_CLOSE, channel.id);
+    msg.signedBody.verifyMessageType(TAG_START_UNCOOPERATIVE_CLOSE, channel.id);
+    var ds = msg.signedBody;
 
-    var a = Semichannel.parse(msg.loadRef(), channel.id, channel.keyA);
-    var b = Semichannel.parse(msg.loadRef(), channel.id, channel.keyB);
+    var a = Semichannel.parse(ds.loadRef(), channel.id, channel.keyA);
+    var b = Semichannel.parse(ds.loadRef(), channel.id, channel.keyB);
 
     verifyStates(channel.commitedSeqnoA, channel.commitedSeqnoB,a, b);
 
@@ -339,7 +334,7 @@ fun startUncooperativeClose(channel: Channel, msg: slice) {
         stateA: a.data,
         stateB: b.data,
         startedAt: blockchain.now(),
-        committedbyA: signedByA,
+        committedbyA: msg.signedByA,
         challenged: false,
     };
 
@@ -348,18 +343,17 @@ fun startUncooperativeClose(channel: Channel, msg: slice) {
 }
 
 @inline_ref
-fun challengeQuarantinedState(channel: Channel, msg: slice) {
+fun challengeQuarantinedState(channel: Channel, msg: ChallengeQuarantineMessage) {
     assert(channel.quarantine != null) throw ERROR_NO_QUARANTINED_STATE;
 
     // Start with the same checks
-    var challengedByA: bool = msg.loadBool();
-    var signature: slice = msg.loadBits(512);
-    assert(isSignatureValid(msg.hash(), signature, challengedByA ? channel.keyA : channel.keyB)) throw ERROR_NOT_AUTHORIZED;
+    assert(isSignatureValid(msg.signedBody.hash(), msg.signature as slice, msg.challengedByA ? channel.keyA : channel.keyB)) throw ERROR_NOT_AUTHORIZED;
 
-    msg.verifyMessageType(TAG_CHALLENGE_QUARANTINEED_STATE, channel.id);
+    msg.signedBody.verifyMessageType(TAG_CHALLENGE_QUARANTINEED_STATE, channel.id);
 
-    var a = Semichannel.parse(msg.loadRef(), channel.id, channel.keyA);
-    var b = Semichannel.parse(msg.loadRef(), channel.id, channel.keyB);
+    var ds = msg.signedBody;
+    var a = Semichannel.parse(ds.loadRef(), channel.id, channel.keyA);
+    var b = Semichannel.parse(ds.loadRef(), channel.id, channel.keyB);
 
     verifyStates(channel.commitedSeqnoA, channel.commitedSeqnoB, a, b);
 
@@ -380,7 +374,7 @@ fun challengeQuarantinedState(channel: Channel, msg: slice) {
         qua.stateB = b.data;
     }
     // only counterparty can report misbehavior
-    assert(qua.committedbyA != challengedByA) throw ERROR_UNAUTHORIZED_CHALLENGE;
+    assert(qua.committedbyA != msg.challengedByA) throw ERROR_UNAUTHORIZED_CHALLENGE;
 
     if (misbehaviorDetected) {
         if (qua.committedbyA) {
@@ -391,24 +385,23 @@ fun challengeQuarantinedState(channel: Channel, msg: slice) {
     }
 
     qua.challenged = true;
-    qua.committedbyA = challengedByA;
+    qua.committedbyA = msg.challengedByA;
     channel.quarantine = qua.serialize();
 
     return contract.setData(channel.serialize());
 }
 
 @inline_ref
-fun settleConditionals(channel: Channel, msg: slice) {
+fun settleConditionals(channel: Channel, msg: SettleConditionalsMessage) {
     assert(channel.quarantine != null) throw ERROR_NO_QUARANTINED_STATE;
 
-    var fromA: int = msg.loadInt(1);
-    var signature: slice = msg.loadBits(512);
-    assert(isSignatureValid(msg.hash(), signature, fromA ? channel.keyA : channel.keyB)) throw ERROR_NOT_AUTHORIZED;
+    assert(isSignatureValid(msg.signedBody.hash(), msg.signature as slice, msg.fromA ? channel.keyA : channel.keyB)) throw ERROR_NOT_AUTHORIZED;
 
-    msg.verifyMessageType(TAG_SETTLE_CONDITIONALS, channel.id);
+    msg.signedBody.verifyMessageType(TAG_SETTLE_CONDITIONALS, channel.id);
 
-    var conditionalsToSettle: dict = msg.loadDict();
-    var conditionalsProof: cell = msg.loadRef();
+    var ds = msg.signedBody;
+    var conditionalsToSettle: dict = ds.loadDict();
+    var conditionalsProof: cell = ds.loadRef();
 
     var qua = Quarantine.parse(channel.quarantine);
     var closure = ClosureConfig.fromCell(channel.closureConfig);
@@ -417,7 +410,7 @@ fun settleConditionals(channel: Channel, msg: slice) {
     assert(quarantineeFinished < blockchain.now()) throw ERROR_QUARANTINE_NOT_FINISHED;
     assert(quarantineeFinished + closure.closeDuration > blockchain.now()) throw ERROR_TOO_LATE_TO_SETTLE_CONDITIONALS;
 
-    var targetState = fromA ? qua.stateB : qua.stateA;
+    var targetState = msg.fromA ? qua.stateB : qua.stateA;
 
     var (csProof: slice, special: int) = conditionalsProof.beginParseSpecial();
     assert(special) throw ERROR_INCORRECT_CONDITIONALS_PROOF;
@@ -443,7 +436,7 @@ fun settleConditionals(channel: Channel, msg: slice) {
     } while (more);
 
     targetState.conditionalsHash = proofHash(target);
-    if (fromA) {
+    if (msg.fromA) {
         qua.stateB = targetState;
     } else {
         qua.stateA = targetState;
@@ -484,6 +477,18 @@ fun Channel.finishUncooperativeClose(mutate self) {
     self.closeChannel(unpackedBalance);
 }
 
+type AllowedMessages = TopUpMessage
+    | JettonTransferNotification
+    | TakeWalletAddressMessage
+    | InitChannelMessage
+    | TopUpMessage
+    | CooperativeCommitMessage
+    | CooperativeCloseMessage
+    | StartUncooperativeCloseMessage
+    | FinishUncooperativeCloseMessage
+    | ChallengeQuarantineMessage
+    | SettleConditionalsMessage;
+
 fun onInternalMessage(_: int, amount: int, inMsgFull: cell, inMsg: slice) {
     var channel = Channel.parse(contract.getData());
 
@@ -497,8 +502,10 @@ fun onInternalMessage(_: int, amount: int, inMsgFull: cell, inMsg: slice) {
 
     // Note, operators of channels are always off-chain parties, not contracts
     // thus no responses and query_ids
-    var op: int = inMsg.loadUint(32);
-    if (op == OP_TOP_UP_BALANCE) {
+    var msg = AllowedMessages.fromSlice(inMsg);
+
+    match(msg) {
+    TopUpMessage => {
         var unpackedPaymentConfig = PaymentConfig.fromCell(channel.paymentConfig);
         if (unpackedPaymentConfig.customCurrency is PaymentConfigExtra) {
             assert(amount >= FEE_EC_ACCEPT) throw ERROR_AMOUNT_NOT_COVERS_FEE;
@@ -509,43 +516,51 @@ fun onInternalMessage(_: int, amount: int, inMsgFull: cell, inMsg: slice) {
             assert(ok && ec == null) throw ERROR_INVALID_EC_ID;
 
             var ecAmount: int = v!.loadVarUInt32();
-            channel.topUpBalance(ecAmount, inMsg);
+            channel.topUpBalance(ecAmount, msg.isA);
         } else {
             assert(unpackedPaymentConfig.customCurrency is PaymentConfigTon) throw ERROR_INVALID_CURRENCY_TYPE;
             assert(amount >= FEE_TON_ACCEPT) throw ERROR_AMOUNT_NOT_COVERS_FEE;
-            channel.topUpBalance(amount - FEE_TON_ACCEPT, inMsg);
+            channel.topUpBalance(amount - FEE_TON_ACCEPT, msg.isA);
         }
-    } else if (op == OP_JETTON_TRANSFER_NOTIFICATION) {
+    },
+    JettonTransferNotification => {
         // return because custom excess handled inside
-        return acceptJettons(channel, sender, amount, inMsg);
-    } else if (op == OP_JETTON_TAKE_WALLET_ADDRESS) {
+        return acceptJettons(channel, sender, amount, msg);
+    },
+    TakeWalletAddressMessage =>  {
         // no excess
-        return assignJettonWallet(channel, sender, inMsg);
-    } else if (op == OP_COOPERATIVE_COMMIT) {
-        channel.cooperativeCommit(inMsg, amount - FEE_COMMIT);
-    } else if (op == OP_INIT_CHANNEL) {
-        initChannel(channel, inMsg);
-    } else if (op == OP_COOPERATIVE_CLOSE) {
+        return assignJettonWallet(channel, sender, msg.wallet_address);
+    },
+    CooperativeCommitMessage => {
+        channel.cooperativeCommit(msg, amount - FEE_COMMIT);
+    },
+    InitChannelMessage => {
+        initChannel(channel, msg);
+    },
+    CooperativeCloseMessage => {
         // excess hadled in channelClose()
-        return channel.cooperativeClose(inMsg);
-    } else if (op == OP_START_UNCOOPERATIVE_CLOSE) {
-        startUncooperativeClose(channel, inMsg);
-    } else if (op == OP_CHALLENGE_QUARANTINEED_STATE) {
-        challengeQuarantinedState(channel, inMsg);
-    } else if (op == OP_SETTLE_CONDITIONALS) {
-        settleConditionals(channel, inMsg);
-    } else if (op == OP_FINISH_UNCOOPERATIVE_CLOSE) {
+        return channel.cooperativeClose(msg);
+    },
+    StartUncooperativeCloseMessage => {
+        startUncooperativeClose(channel, msg);
+    },
+    ChallengeQuarantineMessage => {
+        challengeQuarantinedState(channel, msg);
+    },
+    SettleConditionalsMessage => {
+        settleConditionals(channel, msg);
+    },
+    FinishUncooperativeCloseMessage => {
         // excess hadled in channelClose()
         return channel.finishUncooperativeClose();
-    } else {
-        throw 0xffff;
+    }
     }
 
     sendExcess(channel, sender);
 }
 
-@inline_ref
-fun acceptJettons(channel: Channel, sender: address, tonAmount: int, payload: slice) {
+@inline
+fun acceptJettons(channel: Channel, sender: address, tonAmount: int, msg: JettonTransferNotification) {
     /* TEP-74
       transfer_notification#7362d09c query_id:uint64 amount:(VarUInteger 16)
                                      sender:MsgAddress forward_payload:(Either Cell ^Cell)
@@ -555,24 +570,21 @@ fun acceptJettons(channel: Channel, sender: address, tonAmount: int, payload: sl
     assert(customCurrency is PaymentConfigJettonStorage) throw ERROR_INVALID_CURRENCY_TYPE;
     var jettonConfig = PaymentConfigJetton.fromCell(customCurrency.jettonCell);
 
-    payload.skipBits(64);
-    var jettonAmount: int = payload.loadCoins();
+    var jettonAmount: int = msg.jettonAmount;
 
-    var jettonSender: address = payload.loadAddress();
-    var eitherForwardPayload: bool = payload.loadBool();
-    var forwardPayload: slice = eitherForwardPayload ? payload.loadRef().beginParse() : payload;
+    var jettonSender: address = msg.jettonSender;
+    var eitherForwardPayload: bool = msg.forwardPayload.loadBool();
+    var forwardPayload: slice = eitherForwardPayload ? msg.forwardPayload.loadRef().beginParse() : msg.forwardPayload;
 
     if ((tonAmount < FEE_JETTON_ACCEPT) || (jettonConfig.jettonWallet != sender)) {
         return sendJettonsBack(jettonSender, jettonAmount, sender);
     }
 
     try {
-        var innerOp: int = forwardPayload.loadInt(32);
-        if (innerOp == OP_TOP_UP_BALANCE) {
-            channel.topUpBalance(jettonAmount, forwardPayload);
-            return sendExcess(channel,jettonSender);
-        }
-        throw 0xffff;
+        var parsedPayload = TopUpMessage.fromSlice(forwardPayload);
+        // Will throw on invalid payload
+        channel.topUpBalance(jettonAmount, parsedPayload.isA);
+        return sendExcess(channel,jettonSender);
     } catch {
         sendJettonsBack(jettonSender, jettonAmount, sender);
     }
@@ -661,22 +673,21 @@ fun sendExcess(channel: Channel, dest: address) {
 }
 
 @inline_ref
-fun assignJettonWallet(channel: Channel, sender: address, payload: slice) {
+fun assignJettonWallet(channel: Channel, sender: address, newWallet: address) {
     /* TEP-89
       take_wallet_address#d1735400 query_id:uint64 wallet_address:MsgAddress
                                    owner_address:(Maybe ^MsgAddress)
                                    = InternalMsgBody;
     */
-    payload.skipBits(64);
 
     var paymentConfig = PaymentConfig.fromCell(channel.paymentConfig);
-    assert(paymentConfig.customCurrency is PaymentConfigJettonStorage, 42);
+    assert(paymentConfig.customCurrency is PaymentConfigJettonStorage) throw ERROR_INVALID_CURRENCY_TYPE;
     var jettonConfig  = PaymentConfigJetton.fromCell(paymentConfig.customCurrency.jettonCell);
 
     assert(jettonConfig.jettonWallet.isNone()) throw ERROR_JETTON_WALLET_ALREADY_INSTALLED;
     assert(jettonConfig.jettonRoot == sender) throw ERROR_NOT_AUTHORIZED;
 
-    jettonConfig.jettonWallet = payload.loadAddress();
+    jettonConfig.jettonWallet = newWallet;
 
     paymentConfig.customCurrency = PaymentConfigJettonStorage {
         jettonCell: jettonConfig.toCell()
@@ -706,8 +717,9 @@ fun verifyStates(commitedSeqnoA: int, commitedSeqnoB: int, a: Semichannel, b: Se
 
 @inline_ref
 fun slice.verifyMessageType(mutate self, tag: uint32, id: int): void {
-    assert(self.loadUint(32) == tag) throw ERROR_WRONG_TAG;
-    assert(id == self.loadUint(128)) throw ERROR_WRONG_CHANNEL_ID;
+    var messageId = self.loadAny<ChannelMessageId>();
+    assert(messageId.tag == tag) throw ERROR_WRONG_TAG;
+    assert(messageId.id == id) throw ERROR_WRONG_CHANNEL_ID;
 }
 
 @inline
