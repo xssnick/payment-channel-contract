@@ -429,6 +429,7 @@ fun onInternalMessage(_: int, amount: int, inMsgFull: cell, inMsg: slice) {
             var ecAmount: int = v!.loadVarUInt32();
             channel.topUpBalance(ecAmount, inMsg);
         } else {
+            assert(channel.paymentConfig.currencyType == CURRENCY_TYPE_TON) throw ERROR_INVALID_CURRENCY_TYPE;
             assert(amount >= FEE_TON_ACCEPT) throw ERROR_AMOUNT_NOT_COVERS_FEE;
             channel.topUpBalance(amount - FEE_TON_ACCEPT, inMsg);
         }
