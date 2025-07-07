@@ -85,10 +85,6 @@ struct Channel {
     paymentConfig: Cell<PaymentConfig>
 }
 
-@inline
-fun ClosureConfig.parse(c: cell): ClosureConfig {
-    return ClosureConfig.fromCell(c);
-}
 
 @inline
 fun ClosureConfig.serialize(self): cell {
@@ -96,22 +92,8 @@ fun ClosureConfig.serialize(self): cell {
 }
 
 @inline
-fun PaymentConfig.parse(c: cell): PaymentConfig {
-    return PaymentConfig.fromCell(c);
-}
-
-@inline
 fun PaymentConfig.serialize(self): cell {
     return self.toCell();
-}
-@inline
-fun PaymentConfigJetton.parse(c: cell): PaymentConfigJetton {
-    return PaymentConfigJetton.fromCell(c);
-}
-
-@inline
-fun Balance.parse(c: cell): Balance {
-    return Balance.fromCell(c);
 }
 
 @inline
@@ -156,10 +138,6 @@ fun Semichannel.parse(c: cell, id: uint128, key: uint256): Semichannel {
     };
 };
 
-@inline_ref
-fun Quarantine.parse(c: cell): Quarantine {
-    return Quarantine.fromCell(c);
-}
 
 @inline_ref
 fun Quarantine.serialize(self): Cell<Quarantine>{
@@ -169,9 +147,4 @@ fun Quarantine.serialize(self): Cell<Quarantine>{
 @inline
 fun slice.loadSemichannelBody(mutate self): SemichannelBody {
     return self.loadAny<SemichannelBody>();
-}
-
-@inline
-fun builder.storeSemichannelBody(mutate self, body: SemichannelBody): self {
-    return self.storeAny(body);
 }
