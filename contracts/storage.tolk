@@ -1,4 +1,4 @@
-import "errors.tolk"
+import "errors"
 
 const TAG_STATE = 0x43685374;
 

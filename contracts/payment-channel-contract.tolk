@@ -1,14 +1,14 @@
 tolk 1.0
 
-import "@stdlib/common.tolk"
+import "@stdlib/common"
 import "@stdlib/gas-payments"
 import "@stdlib/tvm-dicts"
 import "@stdlib/tvm-lowlevel"
-import "storage.tolk"
-import "utils.tolk"
-import "fees.tolk"
-import "errors.tolk"
-import "messages.tolk"
+import "storage"
+import "utils"
+import "fees"
+import "errors"
+import "messages"
 
 fun Channel.topUpBalance(mutate self, amount: int, isA: bool) {
     assert(self.inited) throw ERROR_NOT_INITED;
