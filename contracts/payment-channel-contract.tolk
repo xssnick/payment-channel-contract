@@ -354,7 +354,7 @@ fun settleConditionals(channel: Channel, msg: SettleConditionalsMessage) {
     do {
         var (cid: int?, input: slice?, more redef) = conditionals.toSettle.uDictDeleteFirstAndGet(32);
         if (more) {
-            var empty: slice = emptySlice();
+            var empty: slice = createEmptySlice();
             var (target redef, condition: slice, ok: int) = target.isUdictReplaceGet(32, cid!, empty);
             assert(ok) throw ERROR_INCORRECT_CONDITIONALS_PROOF;
             var executableCondition = castToS2I(transformSliceToContinuation(condition));

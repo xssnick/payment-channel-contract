@@ -1,5 +1,5 @@
 @pure
-fun cell.isUdictReplaceGet(self, keyLen: int, index: int, value: slice): (cell, slice, int)
+fun dict.isUdictReplaceGet(self, keyLen: int, index: int, value: slice): (cell, slice, int)
     asm(value index self keyLen) "DICTUREPLACEGET" "NULLSWAPIFNOT";
 
 @pure
@@ -9,10 +9,6 @@ fun cell.beginParseSpecial(self): (slice, int)
 @pure
 fun castToS2I(c: continuation): (slice -> int)
     asm "NOP";
-
-@pure
-fun emptySlice(): slice
-    asm "b{} PUSHSLICE";
 
 @pure
 fun proofHash(c: cell): int
