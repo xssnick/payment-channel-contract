@@ -426,28 +426,22 @@ type AllowedMessages =
     | ChallengeQuarantineMessage
     | SettleConditionalsMessage;
 
-fun onInternalMessage(_: int, amount: int, inMsgFull: cell, inMsg: slice) {
+fun onInternalMessage(in: InMessage) {
     var channel = Channel.parse(contract.getData());
 
-    var cs: slice = inMsgFull.beginParse();
-    var flags: int = cs.loadUint(4);
-    if (flags & 1) {
-        // bounced
-        return;
-    }
-    var sender: address = cs.loadAddress();
+    // Bounce is ignored unless onBouncedMessage
 
     // Note, operators of channels are always off-chain parties, not contracts
     // thus no responses and query_ids
-    var msg = AllowedMessages.fromSlice(inMsg);
+    var msg = AllowedMessages.fromSlice(in.body);
 
     match(msg) {
         TopUpMessage => {
             var unpackedPaymentConfig = channel.paymentConfig.load();
             if (unpackedPaymentConfig.customCurrency is PaymentConfigExtra) {
-                assert(amount >= FEE_EC_ACCEPT) throw ERROR_AMOUNT_NOT_COVERS_FEE;
+                assert(in.valueCoins >= FEE_EC_ACCEPT) throw ERROR_AMOUNT_NOT_COVERS_FEE;
 
-                var ec: dict = cs.loadDict();
+                var ec: dict = in.valueExtra;
                 var (v: slice?, ok: bool) = ec.uDictDeleteAndGet(32, unpackedPaymentConfig.customCurrency.ecId);
                 // If dictionary contains more than one EC - reject
                 assert(ok && ec == null) throw ERROR_INVALID_EC_ID;
@@ -456,20 +450,20 @@ fun onInternalMessage(_: int, amount: int, inMsgFull: cell, inMsg: slice) {
                 channel.topUpBalance(ecAmount, msg.isA);
             } else {
                 assert(unpackedPaymentConfig.customCurrency is PaymentConfigTon) throw ERROR_INVALID_CURRENCY_TYPE;
-                assert(amount >= FEE_TON_ACCEPT) throw ERROR_AMOUNT_NOT_COVERS_FEE;
-                channel.topUpBalance(amount - FEE_TON_ACCEPT, msg.isA);
+                assert(in.valueCoins >= FEE_TON_ACCEPT) throw ERROR_AMOUNT_NOT_COVERS_FEE;
+                channel.topUpBalance(in.valueCoins - FEE_TON_ACCEPT, msg.isA);
             }
         },
         JettonTransferNotification => {
             // return because custom excess handled inside
-            return acceptJettons(channel, sender, amount, msg);
+            return acceptJettons(channel, in.senderAddress, in.valueCoins, msg);
         },
         TakeWalletAddressMessage =>  {
             // no excess
-            return assignJettonWallet(channel, sender, msg.wallet_address);
+            return assignJettonWallet(channel, in.senderAddress, msg.wallet_address);
         },
         CooperativeCommitMessage => {
-            channel.cooperativeCommit(msg, amount - FEE_COMMIT);
+            channel.cooperativeCommit(msg, in.valueCoins - FEE_COMMIT);
         },
         InitChannelMessage => {
             initChannel(channel, msg);
@@ -493,7 +487,7 @@ fun onInternalMessage(_: int, amount: int, inMsgFull: cell, inMsg: slice) {
         }
     }
 
-    sendExcess(channel, sender);
+    sendExcess(channel, in.senderAddress);
 }
 
 @inline
