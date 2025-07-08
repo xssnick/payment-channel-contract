@@ -29,7 +29,7 @@ channel_state#_ inited:Bool
               key_A:uint256 key_B:uint256
               channel_id:uint128
               config:^ClosingConfig
-              commited_seqno_A:uint32 commited_seqno_B:uint32
+              commited_seqno_A:uint64 commited_seqno_B:uint64
               quarantin:(Maybe ^QuarantinedState)
               payments:^PaymentConfig = Storage;
 
