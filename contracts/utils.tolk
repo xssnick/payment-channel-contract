@@ -11,6 +11,14 @@ fun castToS2I(c: continuation): (slice -> int)
     asm "NOP";
 
 @pure
+fun castToCondition(c: continuation): ((cell, slice) -> cell)
+    asm "NOP";
+
+@pure
+fun castToAction(c: continuation): ((slice) -> void)
+    asm "NOP";
+
+@pure
 fun proofHash(c: cell): int
     asm "0 CHASHI";
 
