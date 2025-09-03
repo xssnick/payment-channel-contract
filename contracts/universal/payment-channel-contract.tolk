@@ -27,6 +27,8 @@ type AllowedIntMessages =
     | FinalizeSettleReplicateMessage
     | FinishUncooperativeCloseMessage
     | InitChannelMessage
+    | ExcessMessage
+    | CommentMessage
 
 fun onInternalMessage(in: InMessage) {
     var channel = Channel.parse(contract.getData());
@@ -55,6 +57,12 @@ fun onInternalMessage(in: InMessage) {
         FinishUncooperativeCloseMessage => {
             return channel.finishUncooperativeClose(in.senderAddress);
         }
+        ExcessMessage => {
+
+        }
+        CommentMessage => {
+
+        }
     }
 }
 
@@ -68,8 +76,6 @@ fun onExternalMessage(inMsgBody: slice) {
             // double signed is accepted on alive channel
             assert (channel.inited && channel.quarantine == null) throw ERROR_NOT_AUTHORIZED;
 
-            msg.signedBody.verifyMessageType(TAG_MSG_EXTERNAL, channel.id);
-
             var hash = msg.signedBody.hash();
             assert(isSignatureValid(hash, msg.signatureA.beginParse(), channel.keyA) &&
             isSignatureValid(hash, msg.signatureB.beginParse(), channel.keyB)) throw ERROR_INVALID_SIGNATURE;
@@ -79,8 +85,6 @@ fun onExternalMessage(inMsgBody: slice) {
         ExternalSignedRequest => {
             // owner signed is accepted on inactive channel
             assert (!channel.inited) throw ERROR_NOT_AUTHORIZED;
-
-            msg.signedBody.verifyMessageType(TAG_MSG_EXTERNAL, channel.id);
 
             assert (isSignatureValid(msg.signedBody.hash(), msg.signature as slice, channel.isA ? channel.keyA : channel.keyB)) throw ERROR_INVALID_SIGNATURE;
 
@@ -118,7 +122,12 @@ fun Channel.initChannel(mutate self, msg: InitChannelMessage, sender: address) {
     assert(isSignatureValid(hash, msg.signatureA.beginParse(), self.keyA) &&
     isSignatureValid(hash, msg.signatureB.beginParse(), self.keyB)) throw ERROR_NOT_AUTHORIZED;
 
+    var sourceMsg = msg.toCell();
+
     msg.signedBody.verifyMessageType(TAG_INIT_CHANNEL, self.id);
+
+    var body = msg.signedBody.loadAny<InitChannelBody>();
+    assert (body.seqnoA >= self.commitedSeqnoA && body.seqnoB >= self.commitedSeqnoB) throw ERROR_OUTDATED_STATE;
 
     var deploy: AutoDeployAddress? = null;
     if (self.partyAddress == null) {
@@ -141,11 +150,10 @@ fun Channel.initChannel(mutate self, msg: InitChannelMessage, sender: address) {
                 code: contract.getCode(),
                 data: their.toCell(),
             },
-            toShard: {
-                fixedPrefixLength: 8,
+           /* toShard: {
+                fixedPrefixLength: 8, // ok?
                 closeTo: contract.getAddress(),
-                // TODO: deploy to same shard
-            }
+            }*/
         };
 
         self.partyAddress = address.fromValidBuilder(deploy.buildAddress()).toCell();
@@ -159,11 +167,18 @@ fun Channel.initChannel(mutate self, msg: InitChannelMessage, sender: address) {
     if (sender != party) {
         // init and deploy party contract too
         createMessage({
-            bounce: true,
+            bounce: false,
             dest: deploy != null ? deploy : party,
             value: cc.replicateAttachAmount * 2,
-            body: msg,
+            body: sourceMsg,
         }).send(SEND_MODE_REGULAR);
+    } else {
+        createMessage({
+            bounce: false,
+            dest: party,
+            value: 0,
+            body: (OP_EXCESSES as uint32, 0 as uint64),
+        }).send(SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE | SEND_MODE_IGNORE_ERRORS);
     }
 
     self.inited = true;
@@ -361,6 +376,14 @@ fun Channel.replicateStateIfNeeded<T>(self, sender: address, msg: T): bool {
             body: msg
         }).send(SEND_MODE_REGULAR);
         return true;
+    } else {
+        // return excess to party
+        createMessage({
+            bounce: false,
+            dest: party,
+            value: 0,
+            body: (OP_EXCESSES as uint32, 0 as uint64),
+        }).send(SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE | SEND_MODE_IGNORE_ERRORS);
     }
     return false;
 }
@@ -369,6 +392,8 @@ fun Channel.replicateStateIfNeeded<T>(self, sender: address, msg: T): bool {
 fun Channel.closeChannel(mutate self) {
     self.inited = false;
     self.quarantine = null;
+    self.commitedSeqnoA += 1;
+    self.commitedSeqnoB += 1;
 
     return contract.setData(self.serialize());
 }
@@ -381,6 +406,8 @@ fun slice.verifyMessageType(mutate self, tag: uint32, id: int): void {
 }
 
 fun Channel.doWalletTransaction(mutate self, signedBody: RemainingBitsAndRefs) {
+    signedBody.verifyMessageType(TAG_MSG_EXTERNAL, self.id);
+
     var body = signedBody.loadAny<ExternalSignedBody>();
 
     assert (body.sideA == self.isA) throw ERROR_INVALID_SIDE;
@@ -567,9 +594,6 @@ fun Channel.finishUncooperativeClose(mutate self, sender: address) {
         assert(qua.startedAt +
         closure.quarantineDuration +
         closure.settlementDuration < blockchain.now()) throw ERROR_TOO_EARLY_TO_CLOSE;
-
-        self.commitedSeqnoA = self.commitedSeqnoA + 1;
-        self.commitedSeqnoB = self.commitedSeqnoB + 1;
     } else {
         // when no states = nothing to settle and can close faster
         assert(qua.startedAt + closure.quarantineDuration < blockchain.now()) throw ERROR_TOO_EARLY_TO_CLOSE;

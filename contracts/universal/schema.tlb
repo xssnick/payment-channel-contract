@@ -23,7 +23,7 @@ channel_state#_ is_A:Bool inited:Bool
 
 start_uncooperative_close_channels#_ A:^SignedSemiChannelUniversal B:^SignedSemiChannelUniversal = StartUncooperativeCloseChannels;
 
-init_channel_inner#f0848a33 channel_id:uint128 = InitChannelInnerUniversal;
+init_channel_inner#2aa93806 channel_id:uint128 seqno_A:uint64 seqno_B:uint64 = InitChannelInnerUniversal;
 cooperative_close_inner#3e72726c channel_id:uint128 seqno_A:uint64 seqno_B:uint64 = CooperativeCloseInnerUniversal;
 cooperative_commit_inner#c2c8e579 channel_id:uint128 seqno_A:uint64 seqno_B:uint64 = CooperativeCommitInnerUniversal;
 start_uncooperative_close_inner#a5af1d07 channel_id:uint128 states:(Maybe StartUncooperativeCloseChannels) = StartUncooperativeCloseInnerUniversal;

@@ -7,7 +7,7 @@ import "c5-register-validation"
 const OP_EXCESSES = 0xd53276db
 
 // Message tags
-const TAG_INIT_CHANNEL = 0xf0848a33
+const TAG_INIT_CHANNEL = 0x2aa93806
 const TAG_COOPERATIVE_CLOSE = 0x3e72726c
 const TAG_COOPERATIVE_COMMIT = 0xc2c8e579
 const TAG_START_UNCOOPERATIVE_CLOSE = 0xa5af1d07
@@ -26,6 +26,10 @@ struct (0xa19eda8c) InitChannelMessage {
     signatureA: Cell<bits512>
     signatureB: Cell<bits512>
     signedBody: RemainingBitsAndRefs
+}
+struct InitChannelBody {
+    seqnoA: uint64
+    seqnoB: uint64
 }
 
 struct (0xe02310f7) CooperativeCommitMessage {
@@ -116,4 +120,10 @@ struct ExternalSignedBody {
     validUntil: uint32
     seqno: uint32
     outActions: OutActionsCell?
+}
+
+struct (0xd53276db) ExcessMessage { }
+
+struct (0x00000000) CommentMessage {
+    body: RemainingBitsAndRefs
 }
