@@ -1,0 +1,48 @@
+sc_body#_ seqno:uint64 conditionals_hash:uint256 actions_hash:uint256 = SemiChannelBodyUniversal;
+semichannel_state#98b70b88 channel_id:uint128 data:SemiChannelBodyUniversal counterparty_data:(Maybe ^SemiChannelBodyUniversal)
+                    = SemiChannel;
+signed_schs#_ signature:bits512 state:^SemiChannel = SignedSemiChannelUniversal;
+quarantined_state#_ their_state:(Maybe SemiChannelBodyUniversal)
+                 quarantine_starts:uint32
+                 commited_by_owner:Bool
+                 our_settlement_finalized:Bool
+                 their_actions_hash:uint256
+                 = QuarantinedState;
+conf#_ quarantin_duration:uint32
+     conditional_close_duration:uint32
+     replicate_attach_amount:Coins = ClosingConfig;
+
+channel_state#_ is_A:Bool inited:Bool
+              commited_seqno_A:uint64 commited_seqno_B:uint64
+              wallet_seqno:uint32
+              key_A:uint256 key_B:uint256
+              channel_id:uint128
+              config:^ClosingConfig
+              party_address:(Maybe ^MsgAddress)
+              quarantine:(Maybe ^QuarantinedState) = Storage;
+
+start_uncooperative_close_channels#_ A:^SignedSemiChannelUniversal B:^SignedSemiChannelUniversal = StartUncooperativeCloseChannels;
+
+init_channel_inner#2aa93806 channel_id:uint128 seqno_A:uint64 seqno_B:uint64 = InitChannelInnerUniversal;
+cooperative_close_inner#3e72726c channel_id:uint128 seqno_A:uint64 seqno_B:uint64 = CooperativeCloseInnerUniversal;
+cooperative_commit_inner#c2c8e579 channel_id:uint128 seqno_A:uint64 seqno_B:uint64 = CooperativeCommitInnerUniversal;
+start_uncooperative_close_inner#a5af1d07 channel_id:uint128 states:(Maybe StartUncooperativeCloseChannels) = StartUncooperativeCloseInnerUniversal;
+settle_conditionals_inner#8a3056b7 channel_id:uint128 wallet_seqno:uint32 conditionals_to_settle:(HashmapE 32 Cell) conditionals_proof:^Cell actions_proof:^Cell = SettleConditionalsInnerUniversal;
+finalize_settle_inner#1c1b99b8 channel_id:uint128 wallet_seqno:uint32 actions_hash:uint256 = FinalizeSettleInnerUniversal;
+execute_actions_inner#048b33af channel_id:uint128 action:^Cell actions_our_proof:^Cell actions_their_proof:^Cell = ExecuteActionsInnerUniversal;
+external_inner#22d61a69 channel_id:uint128 side_A:Bool valid_until:uint32 wallet_seqno:uint32 out_actions:(Maybe ^Cell) = ExternalMsgInner;
+
+init_channel#a19eda8c sig_A:^bits512 sig_B:^bits512 data:InitChannelInnerUniversal = InternalMsgBody;
+cooperative_close#66b93f47 sig_A:^bits512 sig_B:^bits512 data:CooperativeCloseInnerUniversal = InternalMsgBody;
+cooperative_commit#e02310f7 sig_A:^bits512 sig_B:^bits512 data:CooperativeCommitInnerUniversal = InternalMsgBody;
+start_uncooperative_close#bd1cdbdb signature:bits512 data:StartUncooperativeCloseInnerUniversal = InternalMsgBody;
+settle_conditionals#255e10b6 signature:bits512 data:SettleConditionalsInnerUniversal = InternalMsgBody;
+finalize_settle#b916bc7c signature:bits512 data:FinalizeSettleInnerUniversal = InternalMsgBody;
+execute_actions#3fb3e346 signature:bits512 data:ExecuteActionsInnerUniversal = InternalMsgBody;
+finish_uncooperative_close#25432a91 = InternalMsgBody;
+
+start_uncooperative_close_replicate#1764fcb2 at:uint32 states:(Maybe StartUncooperativeCloseChannels) = InternalMsgBody;
+finalize_settle_replicate#3fa349d0 actions_hash:uint256 = InternalMsgBody;
+
+msg_external_owner_signed#31a4168c signature:bits512 data:ExternalMsgInner = InternalMsgBody;
+msg_external_double_signed#a887b8fb sig_A:^bits512 sig_B:^bits512 data:ExternalMsgInner = InternalMsgBody;

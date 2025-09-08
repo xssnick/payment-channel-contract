@@ -1,19 +1,16 @@
-import "errors"
+import "../errors"
 
-const TAG_STATE = 0x43685374
+const TAG_STATE = 0x98b70b88
+const SIZE_SIGNATURE = 512
 
-struct SemichannelInternal {
-    data: SemichannelBody
-    counterpartyData: Cell<SemichannelBody>?
-}
 struct Semichannel {
     data: SemichannelBody
-    counterpartyData: SemichannelBody
+    counterpartyData: Cell<SemichannelBody>
 }
 struct SemichannelPacked {
     tag: uint32
     id: uint128
-    state: SemichannelInternal
+    state: Semichannel
 }
 
 struct SemichannelSigned {
@@ -23,68 +20,40 @@ struct SemichannelSigned {
 
 struct SemichannelBody {
     seqno: uint64
-    sent: coins
     conditionalsHash: uint256
+    actionsInputHash: uint256
 }
 
 struct Quarantine {
-    stateA: SemichannelBody
-    stateB: SemichannelBody
+    theirState: SemichannelBody?
     startedAt: uint32
-    committedbyA: bool
-    challenged: bool
+    committedByOwner: bool
+    ourSettlementFinalized: bool
+    actionsToExecuteHash: uint256
 }
 
 struct ClosureConfig {
     quarantineDuration: uint32
-    fine: coins
-    closeDuration: uint32
-}
-
-struct PaymentConfigJetton {
-    jettonRoot: address
-    jettonWallet: address
-}
-struct PaymentConfigExtra {
-    ecId: uint32
-}
-struct PaymentConfigJettonStorage {
-    jettonCell: Cell<PaymentConfigJetton>
-}
-type CustomCurrency =
-    | PaymentConfigExtra
-    | PaymentConfigJettonStorage
-
-struct PaymentConfig {
-    storageFee: coins
-    addressA: address
-    addressB: address
-    customCurrency: CustomCurrency?
-}
-
-struct Balance {
-    depositA: coins
-    depositB: coins
-    withdrawA: coins
-    withdrawB: coins
-    sentA: coins
-    sentB: coins
+    settlementDuration: uint32
+    actionsDuration: uint32
+    replicateAttachAmount: coins
 }
 
 struct Channel {
+    isA: bool
     inited: bool
-    balance: Cell<Balance>
+    commitedSeqnoA: uint64
+    commitedSeqnoB: uint64
+    walletSeqno: uint32
+
     keyA: uint256
     keyB: uint256
     id: uint128
     closureConfig: Cell<ClosureConfig>
-    commitedSeqnoA: uint64
-    commitedSeqnoB: uint64
+    partyAddress: Cell<address>?
 
     quarantine: Cell<Quarantine>?
-    paymentConfig: Cell<PaymentConfig>
 }
-
 
 @inline
 fun ClosureConfig.serialize(self): cell {
@@ -120,21 +89,9 @@ fun Semichannel.parse(c: cell, id: uint128, key: uint256): Semichannel {
     assert(unpackedChannel.tag == TAG_STATE) throw ERROR_WRONG_TAG;
     assert(unpackedChannel.id  == id) throw ERROR_WRONG_CHANNEL_ID;
 
-    var data = unpackedChannel.state.data;
-
-    var counterpartyData = SemichannelBody{
-        seqno: 0,
-        sent: 0,
-        conditionalsHash: 0,
-    };
-
-    if (unpackedChannel.state.counterpartyData != null) {
-        counterpartyData = SemichannelBody.fromCell(unpackedChannel.state.counterpartyData);
-    }
-
     return Semichannel{
-        data: data,
-        counterpartyData: counterpartyData,
+        data: unpackedChannel.state.data,
+        counterpartyData: unpackedChannel.state.counterpartyData,
     };
 };
 
@@ -144,14 +101,9 @@ fun Quarantine.serialize(self): Cell<Quarantine>{
     return self.toCell();
 }
 
-@inline
-fun slice.loadSemichannelBody(mutate self): SemichannelBody {
-    return self.loadAny<SemichannelBody>();
-}
-
 const STATE_UNINITED = 0
 const STATE_OPEN = 1
 const STATE_CLOSURE_STARTED = 2
 const STATE_SETTLING_CONDITIONALS = 3
-const STATE_AWAITING_FINALIZATION = 4
-
+const STATE_EXECUTING_ACTIONS = 4
+const STATE_AWAITING_FINALIZATION = 5
