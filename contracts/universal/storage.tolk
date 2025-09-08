@@ -29,12 +29,13 @@ struct Quarantine {
     startedAt: uint32
     committedByOwner: bool
     ourSettlementFinalized: bool
-    theirActionsToExecuteHash: uint256
+    actionsToExecuteHash: uint256
 }
 
 struct ClosureConfig {
     quarantineDuration: uint32
     settlementDuration: uint32
+    actionsDuration: uint32
     replicateAttachAmount: coins
 }
 
@@ -100,3 +101,9 @@ fun Quarantine.serialize(self): Cell<Quarantine>{
     return self.toCell();
 }
 
+const STATE_UNINITED = 0
+const STATE_OPEN = 1
+const STATE_CLOSURE_STARTED = 2
+const STATE_SETTLING_CONDITIONALS = 3
+const STATE_EXECUTING_ACTIONS = 4
+const STATE_AWAITING_FINALIZATION = 5

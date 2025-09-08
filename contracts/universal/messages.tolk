@@ -13,7 +13,7 @@ const TAG_COOPERATIVE_COMMIT = 0xc2c8e579
 const TAG_START_UNCOOPERATIVE_CLOSE = 0xa5af1d07
 const TAG_SETTLE_CONDITIONALS = 0x8a3056b7
 const TAG_FINALIZE_SETTLE = 0x1c1b99b8
-const TAG_EXECUTE_ACTIONS = 0x1a0ab350
+const TAG_EXECUTE_ACTIONS = 0x048b33af
 const TAG_MSG_EXTERNAL = 0x22d61a69
 
 
@@ -56,11 +56,11 @@ struct (0xbd1cdbdb) StartUncooperativeCloseMessage {
     signature: bits512
     signedBody: RemainingBitsAndRefs
 }
+struct StartUncooperativeCloseBody {
+    states: StartUncooperativeCloseChannels?
+}
 struct (0x1764fcb2) StartUncooperativeCloseReplicateMessage {
     at: uint32
-    body: StartUncooperativeCloseBody
-}
-struct StartUncooperativeCloseBody {
     states: StartUncooperativeCloseChannels?
 }
 struct StartUncooperativeCloseChannels {
@@ -101,10 +101,10 @@ struct (0x3fb3e346) ExecuteActionsMessage {
     signedBody: RemainingBitsAndRefs
 }
 struct ExecuteActionsBody {
-    actions: dict
-    actionsInputProof: cell
+    action: cell
+    actionsOurInputProof: cell
+    actionsTheirInputProof: cell
 }
-
 
 struct (0x31a4168c) ExternalSignedRequest {
     signature: bits512

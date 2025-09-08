@@ -29,7 +29,7 @@ cooperative_commit_inner#c2c8e579 channel_id:uint128 seqno_A:uint64 seqno_B:uint
 start_uncooperative_close_inner#a5af1d07 channel_id:uint128 states:(Maybe StartUncooperativeCloseChannels) = StartUncooperativeCloseInnerUniversal;
 settle_conditionals_inner#8a3056b7 channel_id:uint128 wallet_seqno:uint32 conditionals_to_settle:(HashmapE 32 Cell) conditionals_proof:^Cell actions_proof:^Cell = SettleConditionalsInnerUniversal;
 finalize_settle_inner#1c1b99b8 channel_id:uint128 wallet_seqno:uint32 actions_hash:uint256 = FinalizeSettleInnerUniversal;
-execute_actions_inner#1a0ab350 channel_id:uint128 actions:(HashmapE 256 Cell) actions_proof:^Cell = ExecuteActionsInnerUniversal;
+execute_actions_inner#048b33af channel_id:uint128 action:^Cell actions_our_proof:^Cell actions_their_proof:^Cell = ExecuteActionsInnerUniversal;
 external_inner#22d61a69 channel_id:uint128 side_A:Bool valid_until:uint32 wallet_seqno:uint32 out_actions:(Maybe ^Cell) = ExternalMsgInner;
 
 init_channel#a19eda8c sig_A:^bits512 sig_B:^bits512 data:InitChannelInnerUniversal = InternalMsgBody;

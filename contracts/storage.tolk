@@ -148,3 +148,10 @@ fun Quarantine.serialize(self): Cell<Quarantine>{
 fun slice.loadSemichannelBody(mutate self): SemichannelBody {
     return self.loadAny<SemichannelBody>();
 }
+
+const STATE_UNINITED = 0
+const STATE_OPEN = 1
+const STATE_CLOSURE_STARTED = 2
+const STATE_SETTLING_CONDITIONALS = 3
+const STATE_AWAITING_FINALIZATION = 4
+

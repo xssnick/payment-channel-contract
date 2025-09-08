@@ -17,6 +17,7 @@ type AllowedExtMessages =
     | StartUncooperativeCloseMessage
     | FinishUncooperativeCloseMessage
     | SettleConditionalsMessage
+    | ExecuteActionsMessage
     | FinalizeSettleMessage;
 
 type AllowedIntMessages =
@@ -27,8 +28,6 @@ type AllowedIntMessages =
     | FinalizeSettleReplicateMessage
     | FinishUncooperativeCloseMessage
     | InitChannelMessage
-    | ExcessMessage
-    | CommentMessage
 
 fun onInternalMessage(in: InMessage) {
     var channel = Channel.parse(contract.getData());
@@ -37,7 +36,7 @@ fun onInternalMessage(in: InMessage) {
 
     match(msg) {
         ExecuteActionsMessage => {
-            return channel.executeUncooperativeAction(msg);
+            return channel.executeUncooperativeAction(msg, in.senderAddress);
         }
         InitChannelMessage => {
             return channel.initChannel(msg, in.senderAddress);
@@ -57,12 +56,7 @@ fun onInternalMessage(in: InMessage) {
         FinishUncooperativeCloseMessage => {
             return channel.finishUncooperativeClose(in.senderAddress);
         }
-        ExcessMessage => {
-
-        }
-        CommentMessage => {
-
-        }
+        else => { }
     }
 }
 
@@ -104,6 +98,9 @@ fun onExternalMessage(inMsgBody: slice) {
         }
         SettleConditionalsMessage => {
             return channel.settleConditionals(msg);
+        }
+        ExecuteActionsMessage => {
+            return channel.executeUncooperativeAction(msg, createAddressNone());
         }
         FinishUncooperativeCloseMessage => {
             return channel.finishUncooperativeClose(createAddressNone());
@@ -165,13 +162,24 @@ fun Channel.initChannel(mutate self, msg: InitChannelMessage, sender: address) {
 
     var party = self.partyAddress.load();
     if (sender != party) {
-        // init and deploy party contract too
-        createMessage({
-            bounce: false,
-            dest: deploy != null ? deploy : party,
-            value: cc.replicateAttachAmount * 2,
-            body: sourceMsg,
-        }).send(SEND_MODE_REGULAR);
+        var amt = cc.replicateAttachAmount * 2;
+
+        if (deploy != null) {
+            // init and deploy party contract too
+            createMessage({
+                bounce: false,
+                dest: deploy,
+                value: amt,
+                body: sourceMsg,
+            }).send(SEND_MODE_REGULAR);
+        } else {
+            createMessage({
+                bounce: true,
+                dest: party,
+                value: amt,
+                body: sourceMsg,
+            }).send(SEND_MODE_REGULAR);
+        }
     } else {
         createMessage({
             bounce: false,
@@ -189,15 +197,20 @@ fun Channel.initChannel(mutate self, msg: InitChannelMessage, sender: address) {
 fun Channel.cooperativeCommit(mutate self, msg: CooperativeCommitMessage, sender: address) {
     var hash: int = msg.signedBody.hash();
 
-    msg.signedBody.verifyMessageType(TAG_COOPERATIVE_COMMIT, self.id);
+    var sourceMsg = msg.toCell();
 
     assert(isSignatureValid(hash, msg.signatureA.beginParse(), self.keyA) &&
     isSignatureValid(hash, msg.signatureB.beginParse(), self.keyB)) throw ERROR_NOT_AUTHORIZED;
+
+    msg.signedBody.verifyMessageType(TAG_COOPERATIVE_COMMIT, self.id);
 
     var commitBody = msg.signedBody.loadAny<CooperativeCommitBody>();
 
     assert((self.commitedSeqnoA <= commitBody.seqnoA) &&
     (self.commitedSeqnoB <= commitBody.seqnoB)) throw ERROR_SEQNO_REGRESS;
+
+    assert((self.commitedSeqnoA != commitBody.seqnoA) ||
+    (self.commitedSeqnoB != commitBody.seqnoB)) throw ERROR_SEQNO_REGRESS;
 
     self.commitedSeqnoA = commitBody.seqnoA;
     self.commitedSeqnoB = commitBody.seqnoB;
@@ -214,7 +227,7 @@ fun Channel.cooperativeCommit(mutate self, msg: CooperativeCommitMessage, sender
 
     acceptExternalMessage();
 
-    self.replicateStateIfNeeded(sender, msg);
+    self.replicateStateIfNeeded(sender, sourceMsg);
 
     return contract.setData(self.serialize());
 }
@@ -223,22 +236,24 @@ fun Channel.cooperativeCommit(mutate self, msg: CooperativeCommitMessage, sender
 fun Channel.cooperativeClose(mutate self, msg: CooperativeCloseMessage, sender: address) {
     var hash: int = msg.signedBody.hash();
 
-    msg.signedBody.verifyMessageType(TAG_COOPERATIVE_CLOSE, self.id);
+    var sourceMsg = msg.toCell();
 
     assert(isSignatureValid(hash, msg.signatureA.beginParse(), self.keyA) &&
     isSignatureValid(hash, msg.signatureB.beginParse(), self.keyB)) throw ERROR_NOT_AUTHORIZED;
 
+    msg.signedBody.verifyMessageType(TAG_COOPERATIVE_CLOSE, self.id);
+
     var closeBody = msg.signedBody.loadAny<CooperativeCloseBody>();
 
-    assert((self.commitedSeqnoA < closeBody.seqnoA) &&
-    (self.commitedSeqnoB < closeBody.seqnoB)) throw ERROR_SEQNO_REGRESS;
+    assert((self.commitedSeqnoA <= closeBody.seqnoA) &&
+    (self.commitedSeqnoB <= closeBody.seqnoB)) throw ERROR_SEQNO_REGRESS;
 
     self.commitedSeqnoA = closeBody.seqnoA;
     self.commitedSeqnoB = closeBody.seqnoB;
 
     acceptExternalMessage();
 
-    self.replicateStateIfNeeded(sender, msg);
+    self.replicateStateIfNeeded(sender, sourceMsg);
     self.closeChannel();
 }
 
@@ -246,10 +261,11 @@ fun Channel.cooperativeClose(mutate self, msg: CooperativeCloseMessage, sender: 
 fun Channel.startUncooperativeClose(mutate self, msg: StartUncooperativeCloseMessage) {
     assert (self.inited) throw ERROR_NOT_INITED;
 
-    msg.signedBody.verifyMessageType(TAG_START_UNCOOPERATIVE_CLOSE, self.id);
-    var commitBody = msg.signedBody.loadAny<StartUncooperativeCloseBody>();
-
     assert(isSignatureValid(msg.signedBody.hash(), msg.signature as slice, self.isA ? self.keyA : self.keyB)) throw ERROR_NOT_AUTHORIZED;
+
+    msg.signedBody.verifyMessageType(TAG_START_UNCOOPERATIVE_CLOSE, self.id);
+
+    var commitBody = msg.signedBody.loadAny<StartUncooperativeCloseBody>();
 
     var quaPrev: Quarantine? = null;
     if (self.quarantine != null) {
@@ -269,7 +285,7 @@ fun Channel.startUncooperativeClose(mutate self, msg: StartUncooperativeCloseMes
 
     var qua = Quarantine{
         ourSettlementFinalized: false,
-        theirActionsToExecuteHash: 0,
+        actionsToExecuteHash: 0,
         theirState: quaPrev != null ? quaPrev!.theirState : null,
         startedAt: quaPrev != null ? quaPrev!.startedAt : blockchain.now(),
         committedByOwner: true,
@@ -297,7 +313,7 @@ fun Channel.startUncooperativeClose(mutate self, msg: StartUncooperativeCloseMes
 
     self.replicateStateIfNeeded(createAddressNone(), StartUncooperativeCloseReplicateMessage{
         at: qua.startedAt,
-        body: commitBody,
+        states: commitBody.states,
     });
 
     self.quarantine = qua.serialize();
@@ -310,7 +326,7 @@ fun Channel.startUncooperativeCloseReplica(mutate self, msg: StartUncooperativeC
     assert (self.partyAddress!.load() == sender) throw ERROR_NOT_AUTHORIZED;
 
     var startedAt = msg.at;
-    var commitBody = msg.body;
+    var states = msg.states;
 
     var quaPrev: Quarantine? = null;
     if (self.quarantine != null) {
@@ -325,7 +341,7 @@ fun Channel.startUncooperativeCloseReplica(mutate self, msg: StartUncooperativeC
         assert(quarantineeFinished > blockchain.now()) throw ERROR_TOO_LATE_FOR_QUARANTINE_CHALLENGE;
 
         // we already have quarantine, challenge cannot be without states
-        assert (commitBody.states != null) throw ERROR_QUARANTINE_ALREADY_ACTIVE;
+        assert (states != null) throw ERROR_QUARANTINE_ALREADY_ACTIVE;
 
         // use the earliest time
         if (quaPrev.startedAt < startedAt) {
@@ -335,16 +351,16 @@ fun Channel.startUncooperativeCloseReplica(mutate self, msg: StartUncooperativeC
 
     var qua = Quarantine{
         ourSettlementFinalized: false,
-        theirActionsToExecuteHash: 0,
+        actionsToExecuteHash: 0,
         theirState: quaPrev != null ? quaPrev!.theirState : null,
         startedAt: startedAt,
         committedByOwner: quaPrev != null ? quaPrev!.committedByOwner : false,
     };
 
     // states could be null if there was no interraction between parties, then nothing to commit
-    if (commitBody.states != null) {
-        var a = Semichannel.parse(commitBody.states.A, self.id, self.keyA);
-        var b = Semichannel.parse(commitBody.states.B, self.id, self.keyB);
+    if (states != null) {
+        var a = Semichannel.parse(states.A, self.id, self.keyA);
+        var b = Semichannel.parse(states.B, self.id, self.keyB);
 
         verifyStates(self.commitedSeqnoA, self.commitedSeqnoB, a, b);
 
@@ -358,6 +374,13 @@ fun Channel.startUncooperativeCloseReplica(mutate self, msg: StartUncooperativeC
         self.commitedSeqnoA = a.data.seqno;
         self.commitedSeqnoB = b.data.seqno;
     }
+
+    createMessage({
+        bounce: false,
+        dest: sender,
+        value: 0,
+        body: (OP_EXCESSES as uint32, 0 as uint64),
+    }).send(SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE | SEND_MODE_IGNORE_ERRORS);
 
     self.quarantine = qua.serialize();
     return contract.setData(self.serialize());
@@ -458,8 +481,8 @@ fun Channel.settleConditionals(mutate self, msg: SettleConditionalsMessage) {
     var closure = lazy self.closureConfig.load();
 
     var quarantineeFinished: int = qua.startedAt + closure.quarantineDuration;
-    assert(quarantineeFinished < blockchain.now()) throw ERROR_QUARANTINE_NOT_FINISHED;
-    assert((quarantineeFinished + closure.settlementDuration > blockchain.now()) && !qua.ourSettlementFinalized) throw ERROR_TOO_LATE_TO_SETTLE_CONDITIONALS;
+    assert (quarantineeFinished < blockchain.now()) throw ERROR_QUARANTINE_NOT_FINISHED;
+    assert ((quarantineeFinished + closure.settlementDuration > blockchain.now()) && !qua.ourSettlementFinalized) throw ERROR_TOO_LATE_TO_SETTLE_CONDITIONALS;
     assert (qua.theirState != null) throw ERROR_NOTHING_TO_SETTLE;
 
     var targetConditionals: cell = parseProof(conditionals.conditionalsProof, qua.theirState.conditionalsHash);
@@ -508,15 +531,15 @@ fun Channel.finalizeSettle(mutate self, msg: FinalizeSettleMessage) {
     assert (body.walletSeqno == self.walletSeqno) throw ERROR_INVALID_SEQNO;
 
     var qua = lazy self.quarantine.load();
-
-    assert(qua.theirState != null) throw ERROR_NOTHING_TO_SETTLE;
-    assert (body.actionsInputHash == qua.theirState.actionsInputHash) throw ERROR_OUTDATED_STATE;
-    assert(!qua.ourSettlementFinalized) throw ERROR_ALREADY_INITED;
-
     var closure = lazy self.closureConfig.load();
 
     var quarantineeFinished: int = qua.startedAt + closure.quarantineDuration;
-    assert(quarantineeFinished < blockchain.now()) throw ERROR_QUARANTINE_NOT_FINISHED;
+    assert (quarantineeFinished < blockchain.now()) throw ERROR_QUARANTINE_NOT_FINISHED;
+    assert ((quarantineeFinished + closure.settlementDuration > blockchain.now()) && !qua.ourSettlementFinalized) throw ERROR_TOO_LATE_TO_SETTLE_CONDITIONALS;
+
+    assert (qua.theirState != null) throw ERROR_NOTHING_TO_SETTLE;
+    assert (body.actionsInputHash == qua.theirState.actionsInputHash) throw ERROR_OUTDATED_STATE;
+    assert (!qua.ourSettlementFinalized) throw ERROR_ALREADY_INITED;
 
     acceptExternalMessage();
 
@@ -537,17 +560,29 @@ fun Channel.finalizeSettleReplica(mutate self, msg: FinalizeSettleReplicateMessa
     assert (sender == self.partyAddress!.load()) throw ERROR_NOT_AUTHORIZED;
 
     var qua = lazy self.quarantine.load();
+    var closure = lazy self.closureConfig.load();
 
-    assert(qua.theirActionsToExecuteHash == 0) throw ERROR_TOO_LATE_TO_SETTLE_CONDITIONALS;
+    var quarantineeFinished: int = qua.startedAt + closure.quarantineDuration;
+    assert(quarantineeFinished < blockchain.now()) throw ERROR_QUARANTINE_NOT_FINISHED;
+    assert((quarantineeFinished + closure.settlementDuration > blockchain.now())) throw ERROR_TOO_LATE_TO_SETTLE_CONDITIONALS;
 
-    qua.theirActionsToExecuteHash = msg.actionsInputHash;
+    assert(qua.actionsToExecuteHash == 0) throw ERROR_TOO_LATE_TO_SETTLE_CONDITIONALS;
+
+    createMessage({
+        bounce: false,
+        dest: sender,
+        value: 0,
+        body: (OP_EXCESSES as uint32, 0 as uint64),
+    }).send(SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE | SEND_MODE_IGNORE_ERRORS);
+
+    qua.actionsToExecuteHash = msg.actionsInputHash;
     self.quarantine = qua.serialize();
     return contract.setData(self.serialize());
 }
 
 // it must be executed on other side's contract via internal message, to not burn their ton for fee
 @inline
-fun Channel.executeUncooperativeAction(mutate self, msg: ExecuteActionsMessage) {
+fun Channel.executeUncooperativeAction(mutate self, msg: ExecuteActionsMessage, sender: address) {
     assert(self.quarantine != null) throw ERROR_NO_QUARANTINED_STATE;
 
     assert(isSignatureValid(msg.signedBody.hash(), msg.signature as slice, self.isA ? self.keyB : self.keyA)) throw ERROR_NOT_AUTHORIZED;
@@ -558,26 +593,37 @@ fun Channel.executeUncooperativeAction(mutate self, msg: ExecuteActionsMessage) 
     var qua = lazy self.quarantine.load();
     var closure = lazy self.closureConfig.load();
 
-    assert(qua.startedAt + closure.quarantineDuration < blockchain.now()) throw ERROR_TOO_EARLY_TO_EXECUTE_ACTION;
-    assert (qua.theirActionsToExecuteHash != 0) throw ERROR_NOTHING_TO_EXECUTE;
+    assert(qua.startedAt + closure.quarantineDuration + closure.settlementDuration < blockchain.now()) throw ERROR_TOO_EARLY_TO_EXECUTE_ACTION;
+    assert (qua.actionsToExecuteHash != 0) throw ERROR_NOTHING_TO_EXECUTE;
+    assert (qua.theirState != null) throw ERROR_NOTHING_TO_SETTLE;
 
-    var targetActionsInput: cell = parseProof(body.actionsInputProof, qua.theirActionsToExecuteHash);
+    var targetActionsOurInput: dict = parseProof(body.actionsOurInputProof, qua.actionsToExecuteHash);
+    var targetActionsTheirInput: dict = parseProof(body.actionsTheirInputProof, qua.theirState.actionsInputHash);
 
-    var more: bool = true;
-    do {
-        var (cid: int?, action: slice?, more redef) = body.actions.uDictDeleteFirstAndGet(256);
-        if (more) {
-            assert (action!.hash() == cid!) throw ERROR_INCORRECT_ACTION_HASH;
-            var empty: slice = createEmptySlice();
-            var (targetActionsInput redef, input: slice, ok: int) = targetActionsInput.isUdictReplaceGet(256, cid!, empty);
-            assert(ok) throw ERROR_INCORRECT_ACTION_INPUT;
+    var key = body.action.hash();
 
-            var executableAction = castToAction(transformSliceToContinuation(action!));
-            executableAction(input!);
-        }
-    } while (more);
+    var empty: slice = createEmptySlice();
+    var (targetActionsOurInput redef, inputOur: slice, okOur: int) = targetActionsOurInput.isUdictReplaceGet(256, key, empty);
+    var (inputTheir: slice?, okTheir: bool) = targetActionsTheirInput.uDictGet(256, key);
+    assert(okOur && okTheir && !inputOur.isEmpty()) throw ERROR_INCORRECT_ACTION_INPUT;
 
-    qua.theirActionsToExecuteHash = proofHash(targetActionsInput);
+    var executableAction = castToAction(transformSliceToContinuation(body.action.beginParse()));
+
+    acceptExternalMessage();
+
+    // actions must not throw any errors
+    executableAction(inputOur!, inputTheir!, !self.isA);
+
+    qua.actionsToExecuteHash = proofHash(targetActionsOurInput);
+
+    if (sender != createAddressNone()) {
+        createMessage({
+            bounce: false,
+            dest: sender,
+            value: 0,
+            body: (OP_EXCESSES as uint32, 0 as uint64),
+        }).send(SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE | SEND_MODE_IGNORE_ERRORS);
+    }
 
     self.quarantine = qua.serialize();
     return contract.setData(self.serialize());
@@ -593,7 +639,8 @@ fun Channel.finishUncooperativeClose(mutate self, sender: address) {
     if (qua.theirState != null) {
         assert(qua.startedAt +
         closure.quarantineDuration +
-        closure.settlementDuration < blockchain.now()) throw ERROR_TOO_EARLY_TO_CLOSE;
+        closure.settlementDuration +
+        closure.actionsDuration < blockchain.now()) throw ERROR_TOO_EARLY_TO_CLOSE;
     } else {
         // when no states = nothing to settle and can close faster
         assert(qua.startedAt + closure.quarantineDuration < blockchain.now()) throw ERROR_TOO_EARLY_TO_CLOSE;
@@ -616,7 +663,7 @@ fun parseProof(proof: cell, hash: int): cell {
     return csProof.preloadRef();
 }
 
-get fun getChannelState(): int {
+get fun get_channel_state(): int {
     var channel = Channel.parse(contract.getData());
 
     if (!channel.inited) {
@@ -633,10 +680,19 @@ get fun getChannelState(): int {
         return STATE_CLOSURE_STARTED;
     }
 
-    if (qua.theirState != null && (qua.startedAt +
-    closure.quarantineDuration +
-    closure.settlementDuration > blockchain.now())) {
-        return STATE_SETTLING_CONDITIONALS;
+    if (qua.theirState != null) {
+        if (qua.startedAt +
+        closure.quarantineDuration +
+        closure.settlementDuration > blockchain.now()) {
+            return STATE_SETTLING_CONDITIONALS;
+        }
+
+        if (qua.startedAt +
+        closure.quarantineDuration +
+        closure.settlementDuration +
+        closure.actionsDuration > blockchain.now()) {
+            return STATE_EXECUTING_ACTIONS;
+        }
     }
 
     return STATE_AWAITING_FINALIZATION;
