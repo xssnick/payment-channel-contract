@@ -497,10 +497,10 @@ fun Channel.settleConditionals(mutate self, msg: SettleConditionalsMessage) {
 
     var more: bool = true;
     do {
-        var (cid: int?, input: slice?, more redef) = conditionals.toSettle.uDictDeleteFirstAndGet(32);
+        var (cid: int?, input: slice?, more redef) = conditionals.toSettle.uDictDeleteFirstAndGet(256);
         if (more) {
             var empty: slice = createEmptySlice();
-            var (targetConditionals redef, condition: slice, ok: int) = targetConditionals.isUdictReplaceGet(32, cid!, empty);
+            var (targetConditionals redef, condition: slice, ok: int) = targetConditionals.isUdictReplaceGet(256, cid!, empty);
             assert(ok) throw ERROR_INCORRECT_CONDITIONALS_PROOF;
 
             var executableCondition = castToCondition(transformSliceToContinuation(condition));
