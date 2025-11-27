@@ -15,7 +15,7 @@ fun castToCondition(c: continuation): ((cell, slice) -> cell)
     asm "NOP";
 
 @pure
-fun castToAction(c: continuation): ((slice, slice, bool) -> void)
+fun castToAction(c: continuation): ((int, slice, slice?, bool) -> void)
     asm "NOP";
 
 @pure

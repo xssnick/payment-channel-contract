@@ -25,7 +25,7 @@ fun OutActionsCell.beginParseAllowExotic(self): slice
 
 
 /// verify a cell containing OutActionList that it contains only "send message" actions
-fun OutActionsCell.verifyC5Actions(self, isExternal: bool): self {
+fun OutActionsCell.verifyC5Actions(self, partyAddr: address): self {
     var count = 0;
 
     var cs = self.beginParseAllowExotic();
@@ -40,8 +40,15 @@ fun OutActionsCell.verifyC5Actions(self, isExternal: bool): self {
             throwIfOpcodeDoesNotMatch: ERROR_INVALID_C5
         });
 
-        if (isExternal) {
-            assert (outAction.sendMode & SEND_MODE_IGNORE_ERRORS) throw ERROR_EXTERNAL_SEND_MESSAGE_MUST_HAVE_IGNORE_ERRORS_SEND_MODE;
+        assert (outAction.sendMode & SEND_MODE_IGNORE_ERRORS) throw ERROR_EXTERNAL_SEND_MESSAGE_MUST_HAVE_IGNORE_ERRORS_SEND_MODE;
+
+        var internalMsg = outAction.outMsg.beginParse();
+        if (internalMsg.loadBool() == false) { // internal message
+            internalMsg.skipBits(3); // skip flags
+            internalMsg.loadAddress(); // skip src addr
+
+            // check dst addr, restrict direct messages to party contract, to protect from potential issues
+            assert (internalMsg.loadAddress() != partyAddr) throw ERROR_INVALID_C5;
         }
 
         cs = outAction.prev.beginParseAllowExotic();

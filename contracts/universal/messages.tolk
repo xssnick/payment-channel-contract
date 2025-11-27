@@ -7,14 +7,15 @@ import "c5-register-validation"
 const OP_EXCESSES = 0xd53276db
 
 // Message tags
-const TAG_INIT_CHANNEL = 0x2aa93806
-const TAG_COOPERATIVE_CLOSE = 0x3e72726c
-const TAG_COOPERATIVE_COMMIT = 0xc2c8e579
-const TAG_START_UNCOOPERATIVE_CLOSE = 0xa5af1d07
+const TAG_INIT_CHANNEL = 0x6a78d1a8
+const TAG_COOPERATIVE_CLOSE = 0x51a6fa08
+const TAG_COOPERATIVE_COMMIT = 0x9bc30c12
+const TAG_START_UNCOOPERATIVE_CLOSE = 0x9a50b6bc
 const TAG_SETTLE_CONDITIONALS = 0x8a3056b7
 const TAG_FINALIZE_SETTLE = 0x1c1b99b8
-const TAG_EXECUTE_ACTIONS = 0x048b33af
+const TAG_EXECUTE_ACTIONS = 0x2fa8f89c
 const TAG_MSG_EXTERNAL = 0x22d61a69
+const TAG_MSG_PROXY = 0x3e6c2d61
 
 
 struct ChannelMessageId {
@@ -28,8 +29,7 @@ struct (0xa19eda8c) InitChannelMessage {
     signedBody: RemainingBitsAndRefs
 }
 struct InitChannelBody {
-    seqnoA: uint64
-    seqnoB: uint64
+    seqno: uint64
 }
 
 struct (0xe02310f7) CooperativeCommitMessage {
@@ -38,8 +38,14 @@ struct (0xe02310f7) CooperativeCommitMessage {
     signedBody: RemainingBitsAndRefs
 }
 struct CooperativeCommitBody {
-    seqnoA: uint64
-    seqnoB: uint64
+    seqno: uint64
+    fromA: bool
+    action: Cell<CooperativeCommitAction>?
+}
+struct CooperativeCommitAction {
+    stateA: cell?
+    stateB: cell?
+    code: cell
 }
 
 struct (0x66b93f47) CooperativeCloseMessage {
@@ -48,8 +54,8 @@ struct (0x66b93f47) CooperativeCloseMessage {
     signedBody: RemainingBitsAndRefs
 }
 struct CooperativeCloseBody {
-    seqnoA: uint64
-    seqnoB: uint64
+    seqno: uint64
+    fromA: bool
 }
 
 struct (0xbd1cdbdb) StartUncooperativeCloseMessage {
@@ -57,15 +63,11 @@ struct (0xbd1cdbdb) StartUncooperativeCloseMessage {
     signedBody: RemainingBitsAndRefs
 }
 struct StartUncooperativeCloseBody {
-    states: StartUncooperativeCloseChannels?
+    state: StateBodySigned?
 }
 struct (0x1764fcb2) StartUncooperativeCloseReplicateMessage {
     at: uint32
-    states: StartUncooperativeCloseChannels?
-}
-struct StartUncooperativeCloseChannels {
-    A: Cell<SemichannelSigned>
-    B: Cell<SemichannelSigned>
+    state: StateBodySigned?
 }
 
 struct (0x25432a91) FinishUncooperativeCloseMessage {
@@ -96,6 +98,15 @@ struct SettleConditionalsBody {
     actionsInputProof: cell
 }
 
+struct (0x32b90c8a) ProxySettleMessage {
+    signature: bits512
+    signedBody: RemainingBitsAndRefs
+}
+struct ProxySettleMessageBody {
+    walletSeqno: uint32
+    msg: Cell<ExecuteActionsMessage>
+}
+
 struct (0x3fb3e346) ExecuteActionsMessage {
     signature: bits512
     signedBody: RemainingBitsAndRefs
@@ -103,7 +114,7 @@ struct (0x3fb3e346) ExecuteActionsMessage {
 struct ExecuteActionsBody {
     action: cell
     actionsOurInputProof: cell
-    actionsTheirInputProof: cell
+    actionsTheirInputProof: cell?
 }
 
 struct (0x31a4168c) ExternalSignedRequest {
@@ -126,4 +137,9 @@ struct (0xd53276db) ExcessMessage { }
 
 struct (0x00000000) CommentMessage {
     body: RemainingBitsAndRefs
+}
+
+struct (0x038d9e86) ConditionalsSettledEvent {
+    updatedConditionalsHash: uint256
+    updatedActionsHash: uint256
 }

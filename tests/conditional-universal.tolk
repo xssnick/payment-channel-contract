@@ -1,10 +1,15 @@
 import "@stdlib/tvm-dicts"
+import "../contracts/fees"
+import "../contracts/messages"
+import "../contracts/utils"
 
 fun main() {
 }
 
 struct FeeActionInput {
     amount: coins
+    commited: coins
+    commitSeqno: uint64
 }
 
 /*
@@ -40,19 +45,93 @@ fun conditional_ton(targetActionsInput: dict, condInput: slice, actionHash: int,
 }
 
 @method_id(43)
-fun action_coins(actOur: slice, actTheir: slice, isA: bool, addressA: address, addressB: address, body: cell): void {
+fun action_ton(commitSeqno: int, actOur: slice, actTheir: slice?, isExecutedAtA: bool, addressA: address, addressB: address): void {
     var our = actOur.loadAny<FeeActionInput>();
-    var their = actTheir.loadAny<FeeActionInput>();
-    var amt = our.amount - their.amount;
+    var their = FeeActionInput{amount: 0, commited: 0, commitSeqno: 0};
+    if (actTheir != null) {
+        their = actTheir.loadAny<FeeActionInput>();
+    }
 
+    // commit seqno for both states must be in sync, so we can check only one
+    if (commitSeqno >= our.commitSeqno) {
+        our.amount -= our.commited;
+        their.amount -= their.commited;
+    }
+
+    var amt = our.amount - their.amount;
     if (amt <= 0) {
         return;
     }
 
     createMessage({
         bounce: false,
-        dest: isA ? addressA : addressB,
+        dest: isExecutedAtA ? addressB : addressA,
         value: amt,
-        body: body,
+        body: beginCell().storeUint(0,32),
+    }).send(SEND_MODE_REGULAR | SEND_MODE_IGNORE_ERRORS);
+}
+
+@method_id(44)
+fun action_jettons(commitSeqno: int, actOur: slice, actTheir: slice?, isExecutedAtA: bool, addressA: address, addressB: address, jettonRoot: address, jettonWalletA: address, jettonWalletB: address): void {
+    var our = actOur.loadAny<FeeActionInput>();
+    var their = FeeActionInput{amount: 0, commited: 0, commitSeqno: 0};
+    if (actTheir != null) {
+        their = actTheir.loadAny<FeeActionInput>();
+    }
+
+    // commit seqno for both states must be in sync, so we can check only one
+    if (commitSeqno >= our.commitSeqno) {
+        our.amount -= our.commited;
+        their.amount -= their.commited;
+    }
+
+    var amt = our.amount - their.amount;
+    if (amt <= 0) {
+        return;
+    }
+
+    createMessage({
+        bounce: false,
+        dest: isExecutedAtA ? jettonWalletA : jettonWalletB,
+        value: ton("0.05"),
+        body: AskToTransfer {
+            queryId: 0,
+            jettonAmount: amt,
+            customPayload: null,
+            transferRecipient: isExecutedAtA ? addressB : addressA,
+            sendExcessesTo: contract.getAddress(),
+            forwardTonAmount: 1,
+            forwardPayload: beginCell().storeUint(0,32)
+        }
+    }).send(SEND_MODE_REGULAR | SEND_MODE_IGNORE_ERRORS);
+}
+
+@method_id(45)
+fun action_ec(commitSeqno: int, actOur: slice, actTheir: slice?, isExecutedAtA: bool, addressA: address, addressB: address, ecId: int): void {
+    var our = actOur.loadAny<FeeActionInput>();
+    var their = FeeActionInput{amount: 0, commited: 0, commitSeqno: 0};
+    if (actTheir != null) {
+        their = actTheir.loadAny<FeeActionInput>();
+    }
+
+    // commit seqno for both states must be in sync, so we can check only one
+    if (commitSeqno >= our.commitSeqno) {
+        our.amount -= our.commited;
+        their.amount -= their.commited;
+    }
+
+    var amt = our.amount - their.amount;
+    if (amt <= 0) {
+        return;
+    }
+
+    var currenciesToSend: dict = createEmptyDict();
+    currenciesToSend.uDictSetBuilder(32, ecId, beginCell().storeVarUInt32(amt));
+
+    return createMessage({
+        bounce: false,
+        dest: isExecutedAtA ? addressB : addressA,
+        value: (FEE_EC_PAYOUT, currenciesToSend),
+        body: beginCell().storeUint(0,32),
     }).send(SEND_MODE_REGULAR | SEND_MODE_IGNORE_ERRORS);
 }
