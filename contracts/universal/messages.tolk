@@ -11,7 +11,7 @@ const TAG_INIT_CHANNEL = 0x6a78d1a8
 const TAG_COOPERATIVE_CLOSE = 0x51a6fa08
 const TAG_COOPERATIVE_COMMIT = 0x9bc30c12
 const TAG_START_UNCOOPERATIVE_CLOSE = 0x9a50b6bc
-const TAG_SETTLE_CONDITIONALS = 0x8a3056b7
+const TAG_SETTLE_CONDITIONALS = 0xeb0fdaf9
 const TAG_FINALIZE_SETTLE = 0x1c1b99b8
 const TAG_EXECUTE_ACTIONS = 0x2fa8f89c
 const TAG_MSG_EXTERNAL = 0x22d61a69
@@ -92,6 +92,7 @@ struct (0x255e10b6) SettleConditionalsMessage {
     signedBody: RemainingBitsAndRefs
 }
 struct SettleConditionalsBody {
+    expectedSender: address
     walletSeqno: uint32
     toSettle: dict
     conditionalsProof: cell

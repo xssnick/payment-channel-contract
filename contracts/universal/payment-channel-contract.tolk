@@ -27,6 +27,7 @@ type AllowedIntMessages =
     | FinalizeSettleReplicateMessage
     | FinishUncooperativeCloseMessage
     | InitChannelMessage
+    | SettleConditionalsMessage
 
 fun onInternalMessage(in: InMessage) {
     var channel = Channel.parse(contract.getData());
@@ -45,6 +46,9 @@ fun onInternalMessage(in: InMessage) {
         }
         StartUncooperativeCloseReplicateMessage => {
             return channel.startUncooperativeCloseReplica(msg, in.senderAddress);
+        }
+        SettleConditionalsMessage => {
+            return channel.settleConditionals(msg, in.senderAddress);
         }
         ExecuteActionsMessage => {
             return channel.executeUncooperativeAction(msg, in.senderAddress);
@@ -93,7 +97,7 @@ fun onExternalMessage(inMsgBody: slice) {
             return channel.startUncooperativeClose(msg);
         }
         SettleConditionalsMessage => {
-            return channel.settleConditionals(msg);
+            return channel.settleConditionals(msg, createAddressNone());
         }
         FinalizeSettleMessage => {
             return channel.finalizeSettle(msg);
@@ -154,7 +158,7 @@ fun Channel.initChannel(mutate self, msg: InitChannelMessage, sender: address) {
         createMessage({
             bounce: false,
             dest: deploy,
-            value: cc.replicateAttachAmount * 2,
+            value: cc.replicateAttachAmount * 3,
             body: sourceMsg,
         }).send(SEND_MODE_REGULAR);
     }
@@ -435,7 +439,7 @@ fun Channel.doWalletTransaction(mutate self, signedBody: RemainingBitsAndRefs) {
 }
 
 @inline
-fun Channel.settleConditionals(mutate self, msg: SettleConditionalsMessage) {
+fun Channel.settleConditionals(mutate self, msg: SettleConditionalsMessage, sender: address) {
     assert(self.inited) throw ERROR_NOT_INITED;
 
     assert(self.quarantine != null) throw ERROR_NO_QUARANTINED_STATE;
@@ -446,6 +450,7 @@ fun Channel.settleConditionals(mutate self, msg: SettleConditionalsMessage) {
 
     var conditionals = msg.signedBody.loadAny<SettleConditionalsBody>();
     assert (conditionals.walletSeqno == self.walletSeqno) throw ERROR_INVALID_SEQNO;
+    assert (conditionals.expectedSender == sender) throw ERROR_NOT_AUTHORIZED;
 
     var qua = lazy self.quarantine.load();
     var closure = lazy self.closureConfig.load();
@@ -479,7 +484,7 @@ fun Channel.settleConditionals(mutate self, msg: SettleConditionalsMessage) {
             // That way both party authorized it.
             // Obviously, B should not sign incorrect code which (for instance) sends all money to A
             // The same way A should not run incorrect code which sends all money to B.
-            targetActionsInput = executableCondition(targetActionsInput, input!);
+            targetActionsInput = executableCondition(targetActionsInput, input!, sender);
         }
     } while (more);
 
