@@ -11,11 +11,11 @@ fun castToS2I(c: continuation): (slice -> int)
     asm "NOP";
 
 @pure
-fun castToCondition(c: continuation): ((cell, slice) -> cell)
+fun castToCondition(c: continuation): ((cell, slice, address) -> cell)
     asm "NOP";
 
 @pure
-fun castToAction(c: continuation): ((slice, slice, bool) -> void)
+fun castToAction(c: continuation): ((int, slice, slice?, bool) -> void)
     asm "NOP";
 
 @pure

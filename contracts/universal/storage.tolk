@@ -1,31 +1,26 @@
 import "../errors"
 
-const TAG_STATE = 0x98b70b88
-const SIZE_SIGNATURE = 512
-
-struct Semichannel {
-    data: SemichannelBody
-    counterpartyData: Cell<SemichannelBody>
-}
-struct SemichannelPacked {
-    tag: uint32
-    id: uint128
-    state: Semichannel
-}
-
-struct SemichannelSigned {
-    signature: bits512
-    channel: Cell<SemichannelPacked>
-}
-
-struct SemichannelBody {
-    seqno: uint64
+struct StateSide {
     conditionalsHash: uint256
     actionsInputHash: uint256
 }
 
+struct (0x2f0638e4) StateBody {
+    id: uint128
+    seqno: uint64
+    A: Cell<StateSide>
+    B: Cell<StateSide>
+}
+
+struct StateBodySigned {
+    signatureA: Cell<bits512>
+    signatureB: Cell<bits512>
+    state: RemainingBitsAndRefs
+}
+
 struct Quarantine {
-    theirState: SemichannelBody?
+    seqno: uint64
+    theirState: StateSide?
     startedAt: uint32
     committedByOwner: bool
     ourSettlementFinalized: bool
@@ -42,32 +37,16 @@ struct ClosureConfig {
 struct Channel {
     isA: bool
     inited: bool
-    commitedSeqnoA: uint64
-    commitedSeqnoB: uint64
+    commitedSeqno: uint64
     walletSeqno: uint32
 
     keyA: uint256
     keyB: uint256
     id: uint128
     closureConfig: Cell<ClosureConfig>
-    partyAddress: Cell<address>?
+    partyAddress: address
 
     quarantine: Cell<Quarantine>?
-}
-
-@inline
-fun ClosureConfig.serialize(self): cell {
-    return self.toCell();
-}
-
-@inline
-fun PaymentConfig.serialize(self): cell {
-    return self.toCell();
-}
-
-@inline
-fun Balance.serialize(self): cell {
-    return Balance.toCell(self);
 }
 
 @inline
@@ -80,20 +59,17 @@ fun Channel.serialize(self): cell {
     return self.toCell();
 }
 
-@inline_ref
-fun Semichannel.parse(c: cell, id: uint128, key: uint256): Semichannel {
-    var signedState = SemichannelSigned.fromCell(c);
-    assert(isSignatureValid(signedState.channel.hash(), signedState.signature as slice, key)) throw ERROR_NOT_AUTHORIZED;
-    var unpackedChannel = SemichannelPacked.fromCell(signedState.channel);
+fun StateBodySigned.unpackAndVerify(self, id: uint128, seqno: uint64, keyA: uint256, keyB: uint256): StateBody {
+    var hash = self.state.hash();
+    assert(isSignatureValid(hash, self.signatureA.beginParse(), keyA)
+        & isSignatureValid(hash, self.signatureB.beginParse(), keyB)) throw ERROR_NOT_AUTHORIZED;
 
-    assert(unpackedChannel.tag == TAG_STATE) throw ERROR_WRONG_TAG;
-    assert(unpackedChannel.id  == id) throw ERROR_WRONG_CHANNEL_ID;
-
-    return Semichannel{
-        data: unpackedChannel.state.data,
-        counterpartyData: unpackedChannel.state.counterpartyData,
-    };
-};
+    var res = StateBody.fromSlice(self.state);
+    assert(res.id == id) throw ERROR_WRONG_CHANNEL_ID;
+    assert(res.seqno >= seqno) throw ERROR_OUTDATED_STATE;
+    
+    return res;
+}
 
 
 @inline_ref
